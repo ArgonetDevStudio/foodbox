@@ -13,5 +13,9 @@ slack:
   user-name: "점심봇"
   slack-url: "https://hooks.slack.com/services"
 
+ocr:
+  secret-key:
+  api-url:
+
 server:
   port: 80
