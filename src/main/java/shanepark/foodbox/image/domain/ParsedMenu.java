@@ -33,8 +33,10 @@ public class ParsedMenu {
     public MenuResponse toMenuResponse() {
         LocalDate today = LocalDate.now();
         String[] split = date.split("/");
-        int month = Integer.parseInt(split[0]);
-        int day = Integer.parseInt(split[1].substring(0, split[1].indexOf("(")));
+        String monthStr = split[0].replaceAll("[^0-9]", "");
+        String dayStr = split[1].replaceAll("[^0-9]", "");
+        int month = Integer.parseInt(monthStr);
+        int day = Integer.parseInt(dayStr);
         LocalDate localDate = LocalDate.of(today.getYear(), month, day);
         if (localDate.isBefore(today.minusMonths(6))) {
             localDate = localDate.plusYears(1);
