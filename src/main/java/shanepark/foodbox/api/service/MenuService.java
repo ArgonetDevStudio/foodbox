@@ -39,8 +39,7 @@ public class MenuService {
         crawl();
     }
 
-    public MenuResponse getTodayMenu() {
-        LocalDate today = LocalDate.now();
+    public MenuResponse getTodayMenu(LocalDate today) {
         int dayOfWeek = today.getDayOfWeek().getValue();
         if (dayOfWeek > 5) {
             return new MenuResponse(today, List.of("주말에는 도시락이 없습니다."));

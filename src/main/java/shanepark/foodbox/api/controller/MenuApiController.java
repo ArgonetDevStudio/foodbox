@@ -8,6 +8,8 @@ import shanepark.foodbox.api.domain.ApiResponse;
 import shanepark.foodbox.api.domain.MenuResponse;
 import shanepark.foodbox.api.service.MenuService;
 
+import java.time.LocalDate;
+
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
@@ -17,7 +19,7 @@ public class MenuApiController {
 
     @GetMapping("/menu/today")
     public ApiResponse getTodayMenu() {
-        MenuResponse menu = menuService.getTodayMenu();
+        MenuResponse menu = menuService.getTodayMenu(LocalDate.now());
         return ApiResponse.success(menu);
     }
 
