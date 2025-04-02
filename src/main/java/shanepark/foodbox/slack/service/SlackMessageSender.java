@@ -26,7 +26,7 @@ public class SlackMessageSender {
                     .build(), HttpResponse.BodyHandlers.ofString());
             int statusCode = response.statusCode();
             if (statusCode != 200) {
-                log.info("Failed to send message to slack. statusCode = {}, response = {}, ", statusCode, response);
+                log.info("Failed to send message to slack. payload={}, statusCode = {}, response = {}, ", payload, statusCode, response);
             }
             return statusCode;
         }

@@ -28,18 +28,18 @@ public class SlackNotifyService {
     @Scheduled(cron = "0 0 9 * * *")
     public void notifyTodayMenu() throws IOException, InterruptedException {
         if (!shouldNotify()) {
-            log.info("Today is weekend. Skip notifying today's menu.");
+            log.info("Today is weekend or Wednesday. Skip notifying today's menu.");
             return;
         }
 
         LocalDate today = LocalDate.now(clock);
-        MenuResponse todayMenu = menuService.getTodayMenu(today);
-        if (!todayMenu.isValid()) {
-            log.info("Invalid menu. Skip notifying today's menu: {}", todayMenu);
+        MenuResponse todayMenuResponse = menuService.getTodayMenu(today);
+        if (!todayMenuResponse.isValid()) {
+            log.info("Invalid menu. Skip notifying today's menu: {}", todayMenuResponse);
             return;
         }
 
-        String message = createSlackMessage(todayMenu);
+        String message = createSlackMessage(todayMenuResponse);
         SlackPayload payload = new SlackPayload(slackConfig.getSlackChannel(), slackConfig.getUserName(), message, ":bento:");
 
         slackMessageSender.sendMessage(slackConfig.getSlackUrl(), slackConfig.getSlackToken(), payload);
@@ -58,10 +58,12 @@ public class SlackNotifyService {
         String menus = todayMenu.menus().stream()
                 .map(menu -> "• " + menu)
                 .collect(Collectors.joining("\n"));
-        DayOfWeek dayOfWeek = todayMenu.date().getDayOfWeek();
+        String dateString = todayMenu.date();
+        LocalDate date = LocalDate.parse(dateString);
+        DayOfWeek dayOfWeek = date.getDayOfWeek();
         String dayOfWeekKor = getDayOfWeekKor(dayOfWeek);
 
-        return String.format("<%s %s> 점심 메뉴\n%s", todayMenu.date(), dayOfWeekKor, menus);
+        return String.format("<%s %s> 점심 메뉴\n%s", date, dayOfWeekKor, menus);
     }
 
     private String getDayOfWeekKor(DayOfWeek dayOfWeek) {

@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
+import shanepark.foodbox.api.domain.Menu;
 import shanepark.foodbox.api.domain.MenuResponse;
 import shanepark.foodbox.api.exception.MenuNotUploadedException;
 import shanepark.foodbox.api.repository.MenuRepository;
@@ -19,8 +20,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -36,23 +39,37 @@ public class MenuService {
 
     @PostConstruct
     public void init() {
-        crawl();
+        Boolean isUpToDate = menuRepository.findAll()
+                .stream()
+                .map(Menu::getDate)
+                .max(Comparator.naturalOrder())
+                .map(latest -> latest.isAfter(LocalDate.now()))
+                .orElse(false);
+
+        if (!isUpToDate) {
+            crawl();
+        }
     }
 
     public MenuResponse getTodayMenu(LocalDate today) {
         int dayOfWeek = today.getDayOfWeek().getValue();
         if (dayOfWeek > 5) {
-            return new MenuResponse(today, List.of("주말에는 도시락이 없습니다."));
+            Menu menu = new Menu(today, List.of("주말에는 도시락이 없습니다."));
+            return MenuResponse.of(menu);
         }
-        return menuRepository.findByDate(today)
+        Menu menu = menuRepository.findByDate(today)
                 .orElseGet(() -> {
                     crawl();
                     return menuRepository.findByDate(today).orElseThrow(MenuNotUploadedException::new);
                 });
+        return MenuResponse.of(menu);
     }
 
     public List<MenuResponse> findAll() {
-        return menuRepository.findAll();
+        return menuRepository.findAll()
+                .stream()
+                .map(MenuResponse::of)
+                .collect(Collectors.toList());
     }
 
     public synchronized void crawl() {
@@ -83,10 +100,8 @@ public class MenuService {
             }
         }
 
-        for (ParsedMenu menu : parsed) {
-            MenuResponse resp = menu.toMenuResponse();
-            menuRepository.save(resp);
-        }
+        List<Menu> menus = parsed.stream().map(ParsedMenu::toMenuResponse).toList();
+        menuRepository.saveAll(menus);
         log.info("Crawling done. total time taken: {} ms  , : {}", System.currentTimeMillis() - start, parsed);
     }
 

@@ -1,14 +1,10 @@
 package shanepark.foodbox.api.domain;
 
-import java.time.LocalDate;
 import java.util.List;
 
-public record MenuResponse(
-        LocalDate date,
-        List<String> menus
-) {
-
-    public boolean isValid() {
-        return menus.size() > 2;
+public record MenuResponse(String date, List<String> menus, boolean isValid) {
+    public static MenuResponse of(Menu menu) {
+        return new MenuResponse(menu.getDate().toString(), menu.getMenus(), true);
     }
+
 }

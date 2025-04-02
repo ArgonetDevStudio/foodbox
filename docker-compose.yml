@@ -11,3 +11,6 @@ services:
       - SLACK_CHANNEL=${SLACK_CHANNEL}
       - CLOVA_URL=${CLOVA_URL}
       - CLOVA_SECRET_KEY=${CLOVA_SECRET_KEY}
+      - DB_FILE_DIR=/db
+    volumes:
+      - ./db:/db

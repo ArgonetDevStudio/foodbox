@@ -57,7 +57,7 @@ class SlackNotifyServiceTest {
         mockClock(monday);
 
         // When
-        when(menuService.getTodayMenu(monday)).thenReturn(new MenuResponse(LocalDate.of(2024, 11, 8), List.of("김치찌개", "된장찌개", "제육볶음")));
+        when(menuService.getTodayMenu(monday)).thenReturn(new MenuResponse(LocalDate.of(2024, 11, 8).toString(), List.of("김치찌개", "된장찌개", "제육볶음"), true));
 
         // Then
         slackNotifyService.notifyTodayMenu();
@@ -66,7 +66,7 @@ class SlackNotifyServiceTest {
     @Test
     @DisplayName("invalid menu(with no line) should not send message")
     void shouldNotSendMessageWhenMenuIsInvalid() throws IOException, InterruptedException {
-        MenuResponse invalidMenu1 = new MenuResponse(LocalDate.now(), List.of(""));
+        MenuResponse invalidMenu1 = new MenuResponse(LocalDate.now().toString(), List.of(""), false);
         when(menuService.getTodayMenu(monday)).thenReturn(invalidMenu1);
         mockClock(monday);
 
@@ -81,7 +81,7 @@ class SlackNotifyServiceTest {
     @DisplayName("invalid menu(with 1 line) should not send message")
     void shouldNotSendMessageWhenMenuIsInvalid2() throws IOException, InterruptedException {
         // Given
-        MenuResponse invalidMenu1 = new MenuResponse(LocalDate.now(), List.of("oneMenu"));
+        MenuResponse invalidMenu1 = new MenuResponse(LocalDate.now().toString(), List.of("oneMenu"), false);
         when(menuService.getTodayMenu(monday)).thenReturn(invalidMenu1);
         mockClock(monday);
 
@@ -96,7 +96,7 @@ class SlackNotifyServiceTest {
     @Test
     @DisplayName("invalid menu(with 2 lines) should not send message")
     void shouldNotSendMessageWhenMenuIsInvalid3() throws IOException, InterruptedException {
-        MenuResponse invalidMenu1 = new MenuResponse(LocalDate.now(), List.of("oneMenu", "twoMenu"));
+        MenuResponse invalidMenu1 = new MenuResponse(LocalDate.now().toString(), List.of("oneMenu", "twoMenu"), false);
         when(menuService.getTodayMenu(monday)).thenReturn(invalidMenu1);
         mockClock(monday);
 
@@ -110,8 +110,8 @@ class SlackNotifyServiceTest {
     @Test
     @DisplayName("valid menu(with 3 lines) should send message")
     void shouldNotSendMessageWhenMenuIsInvalid4() throws IOException, InterruptedException {
-        MenuResponse invalidMenu1 = new MenuResponse(LocalDate.now(), List.of("oneMenu", "twoMenu", "threeMenu"));
-        when(menuService.getTodayMenu(monday)).thenReturn(invalidMenu1);
+        MenuResponse validMenu = new MenuResponse(LocalDate.now().toString(), List.of("oneMenu", "twoMenu", "threeMenu"), true);
+        when(menuService.getTodayMenu(monday)).thenReturn(validMenu);
         mockSlackConfig();
         mockClock(monday);
 
@@ -177,7 +177,7 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate mon = LocalDate.of(2025, 3, 24);
         mockClock(mon);
-        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now(), List.of("invalidMenu")));
+        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("invalidMenu"), false));
         slackNotifyService.notifyTodayMenu();
         verify(menuService, only()).getTodayMenu(mon);
     }
@@ -188,7 +188,7 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate tue = LocalDate.of(2025, 3, 25);
         mockClock(tue);
-        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now(), List.of("invalidMenu")));
+        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("invalidMenu"), false));
         slackNotifyService.notifyTodayMenu();
         verify(menuService, only()).getTodayMenu(tue);
     }
@@ -199,7 +199,7 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate thu = LocalDate.of(2025, 3, 27);
         mockClock(thu);
-        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now(), List.of("invalidMenu")));
+        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("invalidMenu"), false));
         slackNotifyService.notifyTodayMenu();
         verify(menuService, only()).getTodayMenu(thu);
     }
@@ -210,10 +210,9 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate fri = LocalDate.of(2025, 3, 28);
         mockClock(fri);
-        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now(), List.of("invalidMenu")));
+        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("invalidMenu"), false));
         slackNotifyService.notifyTodayMenu();
         verify(menuService, only()).getTodayMenu(fri);
     }
-
 
 }
