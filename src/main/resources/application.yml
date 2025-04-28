@@ -6,7 +6,7 @@ foodbox:
   db-file-dir: ${DB_FILE_DIR:"/foodbox/db"}
 
 crawl:
-  crawl-url: ${CRAWL_URL:"https://foodboxofficial.modoo.at/?link=e3pla1lv"}
+  crawl-url: ${CRAWL_URL:https://foodboxofficial.modoo.at/?link=e3pla1lv}
   css-selector: .gallery_img img
   image-index: 1
 
