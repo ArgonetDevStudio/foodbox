@@ -1,4 +1,4 @@
-package shanepark.foodbox.slack.domain;
+package shanepark.foodbox.slack.domain.dto;
 
 public record SlackPayload(
         String channel,

@@ -3,13 +3,15 @@ package shanepark.foodbox.slack.service;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import shanepark.foodbox.api.domain.MenuResponse;
 import shanepark.foodbox.api.service.MenuService;
 import shanepark.foodbox.slack.SlackConfig;
-import shanepark.foodbox.slack.domain.SlackPayload;
+import shanepark.foodbox.slack.domain.dto.SlackPayload;
 
 import java.io.IOException;
 import java.time.Clock;
@@ -18,6 +20,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -37,6 +40,9 @@ class SlackNotifyServiceTest {
 
     @Mock
     Clock clock;
+
+    @Captor
+    private ArgumentCaptor<SlackPayload> payloadCaptor;
 
     LocalDate monday = LocalDate.of(2025, 3, 31);
 
@@ -130,7 +136,7 @@ class SlackNotifyServiceTest {
     }
 
     @Test
-    @DisplayName("Should notify today false if it is Saturday")
+    @DisplayName("Should not notify on Saturday")
     void shouldNotifyFalse1() throws IOException, InterruptedException {
         // Given
         LocalDate date = LocalDate.of(2025, 3, 29); // Saturday
@@ -140,11 +146,11 @@ class SlackNotifyServiceTest {
         slackNotifyService.notifyTodayMenu();
 
         // Then
-        verify(menuService, never()).getTodayMenu(date);
+        verify(slackMessageSender, never()).sendMessage(anyString(), anyString(), any(SlackPayload.class));
     }
 
     @Test
-    @DisplayName("Should notify today false if it is Sunday")
+    @DisplayName("Should not notify on Sunday")
     void shouldNotifyFalse2() throws IOException, InterruptedException {
         // Given
         LocalDate date = LocalDate.of(2025, 3, 30); // SUNDAY
@@ -154,32 +160,58 @@ class SlackNotifyServiceTest {
         slackNotifyService.notifyTodayMenu();
 
         // Then
-        verify(menuService, never()).getTodayMenu(date);
+        verify(slackMessageSender, never()).sendMessage(anyString(), anyString(), any(SlackPayload.class));
     }
 
     @Test
-    @DisplayName("Should notify today false if it is Wednesday")
-    void shouldNotifyFalse3() throws IOException, InterruptedException {
+    @DisplayName("Should notify on Wednesday which is not the last, and the slack message must contains '데니스댈리'")
+    void wednesday1() throws IOException, InterruptedException {
         // Given
-        LocalDate date = LocalDate.of(2025, 3, 26); // WEDNESDAY
+        LocalDate date = LocalDate.of(2025, 4, 23); // WEDNESDAY but not the last
         mockClock(date);
 
         // When
+        slackConfigSetup();
         slackNotifyService.notifyTodayMenu();
 
         // Then
-        verify(menuService, never()).getTodayMenu(date);
+        verify(slackMessageSender, only()).sendMessage(anyString(), anyString(), payloadCaptor.capture());
+        String slackMessage = payloadCaptor.getValue().text();
+        assertThat(slackMessage).contains("데니스델리");
+    }
+
+    @Test
+    @DisplayName("Should notify on Wednesday which is the last, and the slack message must contains '외식'")
+    void wednesday2() throws IOException, InterruptedException {
+        // Given
+        LocalDate date = LocalDate.of(2025, 4, 30); // WEDNESDAY and it's the last
+        mockClock(date);
+
+        // When
+        slackConfigSetup();
+        slackNotifyService.notifyTodayMenu();
+
+        // Then
+        verify(slackMessageSender, only()).sendMessage(anyString(), anyString(), payloadCaptor.capture());
+        String slackMessage = payloadCaptor.getValue().text();
+        assertThat(slackMessage).contains("외식");
     }
 
     @Test
     @DisplayName("Should notify on [Monday], Tuesday, Thursday, Friday")
-    void shouldNotifyTrue() throws IOException, InterruptedException {
+    void shouldNotifyOnMonday() throws IOException, InterruptedException {
         // Given
         LocalDate mon = LocalDate.of(2025, 3, 24);
         mockClock(mon);
-        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("invalidMenu"), false));
+
+        // When
+        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("validMenu"), true));
+        slackConfigSetup();
         slackNotifyService.notifyTodayMenu();
+
+        // Then
         verify(menuService, only()).getTodayMenu(mon);
+        verify(slackMessageSender, only()).sendMessage(anyString(), anyString(), any(SlackPayload.class));
     }
 
     @Test
@@ -188,9 +220,15 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate tue = LocalDate.of(2025, 3, 25);
         mockClock(tue);
-        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("invalidMenu"), false));
+
+        //When
+        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("validMenu"), true));
+        slackConfigSetup();
         slackNotifyService.notifyTodayMenu();
+
+        // Then
         verify(menuService, only()).getTodayMenu(tue);
+        verify(slackMessageSender, only()).sendMessage(anyString(), anyString(), any(SlackPayload.class));
     }
 
     @Test
@@ -199,9 +237,15 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate thu = LocalDate.of(2025, 3, 27);
         mockClock(thu);
-        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("invalidMenu"), false));
+
+        //When
+        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("validMenu"), true));
+        slackConfigSetup();
         slackNotifyService.notifyTodayMenu();
+
+        // Then
         verify(menuService, only()).getTodayMenu(thu);
+        verify(slackMessageSender, only()).sendMessage(anyString(), anyString(), any(SlackPayload.class));
     }
 
     @Test
@@ -210,9 +254,22 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate fri = LocalDate.of(2025, 3, 28);
         mockClock(fri);
-        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("invalidMenu"), false));
+
+        //When
+        when(menuService.getTodayMenu(any())).thenReturn(new MenuResponse(LocalDate.now().toString(), List.of("validMenu"), true));
+        slackConfigSetup();
         slackNotifyService.notifyTodayMenu();
+
+        // Then
         verify(menuService, only()).getTodayMenu(fri);
+        verify(slackMessageSender, only()).sendMessage(anyString(), anyString(), any(SlackPayload.class));
+    }
+
+    void slackConfigSetup() {
+        when(slackConfig.getSlackChannel()).thenReturn("#test-channel");
+        when(slackConfig.getUserName()).thenReturn("TestUser");
+        when(slackConfig.getSlackUrl()).thenReturn("https://hooks.slack.com/test");
+        when(slackConfig.getSlackToken()).thenReturn("test-token");
     }
 
 }
