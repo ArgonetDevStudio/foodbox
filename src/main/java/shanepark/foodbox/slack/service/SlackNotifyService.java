@@ -7,12 +7,14 @@ import org.springframework.stereotype.Service;
 import shanepark.foodbox.api.domain.MenuResponse;
 import shanepark.foodbox.api.service.MenuService;
 import shanepark.foodbox.slack.SlackConfig;
-import shanepark.foodbox.slack.domain.SlackPayload;
+import shanepark.foodbox.slack.domain.dto.SlackPayload;
+import shanepark.foodbox.slack.domain.enums.NotifyDate;
 
 import java.io.IOException;
 import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
@@ -27,31 +29,30 @@ public class SlackNotifyService {
 
     @Scheduled(cron = "0 0 9 * * *")
     public void notifyTodayMenu() throws IOException, InterruptedException {
-        if (!shouldNotify()) {
-            log.info("Today is weekend or Wednesday. Skip notifying today's menu.");
-            return;
-        }
-
         LocalDate today = LocalDate.now(clock);
-        MenuResponse todayMenuResponse = menuService.getTodayMenu(today);
-        if (!todayMenuResponse.isValid()) {
-            log.info("Invalid menu. Skip notifying today's menu: {}", todayMenuResponse);
+        NotifyDate status = NotifyDate.of(today);
+
+        if (status == NotifyDate.WEEKENDS) {
+            log.info(status.getMessage());
             return;
         }
 
-        String message = createSlackMessage(todayMenuResponse);
+        MenuResponse menuResponse;
+        if (status == NotifyDate.BENTO_DAY) {
+            menuResponse = menuService.getTodayMenu(today);
+        } else {
+            menuResponse = new MenuResponse(today.toString(), List.of(status.getMessage()), true);
+        }
+
+        if (!menuResponse.isValid()) {
+            log.info("Invalid menu. Skip notifying today's menu: {}", menuResponse);
+            return;
+        }
+
+        String message = createSlackMessage(menuResponse);
         SlackPayload payload = new SlackPayload(slackConfig.getSlackChannel(), slackConfig.getUserName(), message, ":bento:");
 
         slackMessageSender.sendMessage(slackConfig.getSlackUrl(), slackConfig.getSlackToken(), payload);
-    }
-
-    /**
-     * Notify only on weekdays except Wednesday.
-     */
-    private boolean shouldNotify() {
-        LocalDate today = LocalDate.now(clock);
-        DayOfWeek dayOfWeek = today.getDayOfWeek();
-        return dayOfWeek.getValue() <= 5 && dayOfWeek != DayOfWeek.WEDNESDAY;
     }
 
     private String createSlackMessage(MenuResponse todayMenu) {

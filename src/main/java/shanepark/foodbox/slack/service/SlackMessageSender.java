@@ -3,7 +3,7 @@ package shanepark.foodbox.slack.service;
 import com.google.gson.Gson;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import shanepark.foodbox.slack.domain.SlackPayload;
+import shanepark.foodbox.slack.domain.dto.SlackPayload;
 
 import java.io.IOException;
 import java.net.URI;

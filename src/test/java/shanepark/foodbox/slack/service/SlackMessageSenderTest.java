@@ -1,7 +1,7 @@
 package shanepark.foodbox.slack.service;
 
 import org.junit.jupiter.api.Test;
-import shanepark.foodbox.slack.domain.SlackPayload;
+import shanepark.foodbox.slack.domain.dto.SlackPayload;
 
 import java.io.IOException;
 
