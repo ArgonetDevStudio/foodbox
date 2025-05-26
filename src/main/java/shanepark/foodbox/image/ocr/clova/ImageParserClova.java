@@ -66,7 +66,7 @@ public class ImageParserClova implements ImageParser {
 
             for (DayRegion dayRegion : dayRegions) {
                 if (dayRegion.date().contains(middleOfX, middleOfY)) {
-                    dateMap.put(dayRegion, inferText);
+                    dateMap.merge(dayRegion, inferText, String::concat);
                     break;
                 }
                 if (dayRegion.menu().contains(middleOfX, middleOfY)) {

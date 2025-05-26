@@ -1,5 +1,6 @@
 package shanepark.foodbox.image.service;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -9,7 +10,6 @@ import shanepark.foodbox.image.domain.ParsedMenu;
 import shanepark.foodbox.image.ocr.ImageMarginCalculator;
 import shanepark.foodbox.image.ocr.clova.ImageParserClova;
 import shanepark.foodbox.image.ocr.clova.NaverClovaApi;
-import shanepark.foodbox.image.ocr.clova.NaverClovaConfig;
 
 import java.io.IOException;
 import java.util.List;
@@ -20,7 +20,6 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class ImageParserClovaTest {
-
     @Mock
     NaverClovaApi naverClovaApi;
 
@@ -55,6 +54,25 @@ class ImageParserClovaTest {
         assertThat(firstMenu.get(6)).isEqualTo("시금치 나물 무침");
         assertThat(firstMenu.get(7)).isEqualTo("배추 김치");
         assertThat(firstMenu.get(8)).isEqualTo("버섯 고추장국");
+    }
+
+
+    @Test
+    @DisplayName("image parse test 20250526")
+    void parse6() throws IOException {
+        // Given
+        ImageMarginCalculator imageMarginCalculator = new ImageMarginCalculator();
+        ImageParserClova imageParserClova = new ImageParserClova(imageMarginCalculator, naverClovaApi);
+
+        ClassPathResource clovaResponseResource = new ClassPathResource("clova/response20250526.json");
+        String clovaResponse = new String(clovaResponseResource.getInputStream().readAllBytes());
+        ClassPathResource image = new ClassPathResource("menu/menu-20250526.png");
+
+        // When
+        when(naverClovaApi.clovaRequest(anyString())).thenReturn(clovaResponse);
+        List<ParsedMenu> parse = imageParserClova.parse(image.getFile().toPath());
+
+        assertThat(parse).hasSize(10);
     }
 
 }
