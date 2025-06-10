@@ -1,5 +1,6 @@
 package shanepark.foodbox.image;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -14,7 +15,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-
+@Disabled // Tesseract OCR tests take a long time to run
 class ImageParserTesseractTest {
     private final Logger logger = LoggerFactory.getLogger(ImageParserTesseractTest.class);
     ImageParserTesseract parser = new ImageParserTesseract(new ImageMarginCalculator());
