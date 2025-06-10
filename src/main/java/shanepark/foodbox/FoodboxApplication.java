@@ -32,10 +32,6 @@ public class FoodboxApplication {
         String os = System.getProperty("os.name");
         log.info("OS: {}, arch: {}", os, arch);
 
-        if (os.contains("Mac") && arch.contains("aarch64")) {
-            System.setProperty("jna.library.path", "/opt/homebrew/opt/tesseract/lib");
-        }
-
         log.info("CrawlConfig: {}", crawlConfig);
         log.info("naverClovaConfig: {}", naverClovaConfig);
         log.info("SlackConfig: {}", slackConfig);

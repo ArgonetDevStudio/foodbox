@@ -13,7 +13,6 @@ import shanepark.foodbox.crawl.CrawlConfig;
 import shanepark.foodbox.crawl.MenuCrawler;
 import shanepark.foodbox.image.domain.ParsedMenu;
 import shanepark.foodbox.image.ocr.clova.ImageParserClova;
-import shanepark.foodbox.image.ocr.tesseract.ImageParserTesseract;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -32,7 +31,6 @@ public class MenuService {
 
     private final MenuRepository menuRepository;
     private final MenuCrawler menuCrawler;
-    private final ImageParserTesseract imageParserTesseract;
     private final ImageParserClova imageParserClova;
     private final CrawlConfig crawlConfig;
     private String lastImageHash;
@@ -93,11 +91,6 @@ public class MenuService {
             parsed = imageParserClova.parse(image);
         } catch (Exception e) {
             log.error("Failed to parse image with Clova", e);
-            try {
-                parsed = imageParserTesseract.parse(image);
-            } catch (Exception e_) {
-                log.error("Failed to parse image with Tesseract", e_);
-            }
         }
 
         List<Menu> menus = parsed.stream().map(ParsedMenu::toMenuResponse).toList();

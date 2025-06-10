@@ -30,17 +30,10 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
-    implementation 'net.sourceforge.tess4j:tess4j:5.13.0'
-    implementation("org.bytedeco:javacv-platform:1.5.10")
     implementation 'org.jsoup:jsoup:1.15.3'
     implementation 'com.google.code.gson:gson:2.8.9'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
-}
-
-// for apple silicon
-test {
-    systemProperty "jna.library.path", "/opt/homebrew/opt/tesseract/lib"
 }
