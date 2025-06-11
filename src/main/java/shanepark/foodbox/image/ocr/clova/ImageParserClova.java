@@ -15,7 +15,9 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.*;
+import java.util.regex.Pattern;
 
 @RequiredArgsConstructor
 @Component
@@ -24,23 +26,26 @@ public class ImageParserClova implements ImageParser {
     private final NaverClovaApi naverClovaApi;
     private final Base64.Encoder encoder = Base64.getEncoder();
     private final Gson gson = new Gson();
+    private final Clock clock;
+
+    final Pattern DATE_PATTERN = Pattern.compile("\\d{1,2}일");
+    final Pattern DAY_PATTERN = Pattern.compile("MON|TUE|WED|THU|FRI");
 
     @Override
     public List<ParsedMenu> parse(Path path) throws IOException {
         String base64 = encoder.encodeToString(Files.readAllBytes(path));
         String response = naverClovaApi.clovaRequest(base64);
-
-        BufferedImage bufferedImage = ImageIO.read(path.toFile());
-        List<DayRegion> dayRegions = imageMarginCalculator.calcParseRegions(bufferedImage);
-        return parseResponse(response, dayRegions);
-    }
-
-    private List<ParsedMenu> parseResponse(String response, List<DayRegion> dayRegions) {
         JsonObject jsonObject = gson.fromJson(response, JsonObject.class);
         JsonArray images = jsonObject.getAsJsonArray("images");
         JsonObject image = images.get(0).getAsJsonObject();
         JsonArray fields = image.getAsJsonArray("fields");
 
+        BufferedImage bufferedImage = ImageIO.read(path.toFile());
+        List<DayRegion> dayRegions = imageMarginCalculator.calcParseRegions(bufferedImage, fields);
+        return parseResponse(fields, dayRegions);
+    }
+
+    private List<ParsedMenu> parseResponse(JsonArray fields, List<DayRegion> dayRegions) {
         Map<DayRegion, String> dateMap = new HashMap<>();
         Map<DayRegion, List<InferTextField>> menuMap = new HashMap<>();
         for (DayRegion dayRegion : dayRegions) {
@@ -63,9 +68,16 @@ public class ImageParserClova implements ImageParser {
             middleOfY /= 4;
 
             String inferText = field.get("inferText").getAsString();
+            float inferConfidence = field.get("inferConfidence").getAsFloat();
+            if (inferConfidence <= 0.8 || inferText.isEmpty()) {
+                continue;
+            }
 
             for (DayRegion dayRegion : dayRegions) {
                 if (dayRegion.date().contains(middleOfX, middleOfY)) {
+                    if (!DATE_PATTERN.matcher(inferText).find() && !DAY_PATTERN.matcher(inferText).find()) {
+                        continue;
+                    }
                     dateMap.merge(dayRegion, inferText, String::concat);
                     break;
                 }
@@ -79,7 +91,7 @@ public class ImageParserClova implements ImageParser {
 
         List<ParsedMenu> answer = new ArrayList<>();
         for (DayRegion day : dayRegions) {
-            ParsedMenu parsedMenu = new ParsedMenu(dateMap.get(day));
+            ParsedMenu parsedMenu = new ParsedMenu(clock, dateMap.get(day));
             String menu = buildMenuString(menuMap.get(day));
             parsedMenu.setMenu(menu);
             answer.add(parsedMenu);

@@ -7,13 +7,14 @@ import org.slf4j.LoggerFactory;
 import shanepark.foodbox.crawl.CrawlConfig;
 import shanepark.foodbox.crawl.MenuCrawler;
 import shanepark.foodbox.image.domain.ParsedMenu;
-import shanepark.foodbox.image.ocr.ImageMarginCalculator;
+import shanepark.foodbox.image.ocr.ImageMarginCalculatorDaejeon;
 import shanepark.foodbox.image.ocr.clova.ImageParserClova;
 import shanepark.foodbox.image.ocr.clova.NaverClovaApi;
 import shanepark.foodbox.image.ocr.clova.NaverClovaConfig;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.List;
 
 import static shanepark.foodbox.integration.TestConstant.*;
@@ -37,7 +38,7 @@ public class IntegrationTest {
 
         NaverClovaConfig config = new NaverClovaConfig(url, secretKey);
         NaverClovaApi api = new NaverClovaApi(config);
-        ImageParserClova parser = new ImageParserClova(new ImageMarginCalculator(), api);
+        ImageParserClova parser = new ImageParserClova(new ImageMarginCalculatorDaejeon(), api, Clock.systemDefaultZone());
 
         List<ParsedMenu> result = parser.parse(crawlImage());
         for (ParsedMenu parsedMenu : result) {
