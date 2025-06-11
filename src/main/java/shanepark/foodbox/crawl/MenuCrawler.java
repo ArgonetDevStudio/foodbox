@@ -1,10 +1,12 @@
 package shanepark.foodbox.crawl;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 import shanepark.foodbox.api.exception.ImageCrawlException;
 
@@ -17,21 +19,36 @@ import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
 @Component
 @Slf4j
+@RequiredArgsConstructor
 public class MenuCrawler {
+    private final ObjectMapper objectMapper;
 
     public Path getImage(CrawlConfig crawlConfig) {
         try {
             String url = crawlConfig.getCrawlUrl();
-            int index = crawlConfig.getImageIndex();
 
             Document document = Jsoup.connect(url).get();
-            Elements images = document.select(crawlConfig.getCssSelector());
-            if (images.size() <= index) {
-                throw new IllegalArgumentException("index is out of range");
+            String cssSelector = crawlConfig.getCssSelector();
+            Element scriptElement = document.selectFirst(cssSelector);
+            if (scriptElement == null) {
+                throw new IllegalArgumentException("No script element found with selector: " + cssSelector);
             }
-            Element image = images.get(index);
-            String imageSrc = getImageSrc(url, image);
 
+            String json = scriptElement.html();
+            JsonNode jsonNode = objectMapper.readTree(json);
+            JsonNode sessions = jsonNode.at(crawlConfig.getCrawlImageExpr());
+            String imageSrc = null;
+            for (JsonNode session : sessions) {
+                if ("Image".equals(session.get("type").asText())) {
+                    JsonNode attachments = session.get("attachments");
+                    JsonNode image = attachments.get(crawlConfig.getImageIndex());
+                    imageSrc = image.get("imgOriginUrl").asText();
+                }
+            }
+
+            if (imageSrc == null) {
+                throw new IllegalArgumentException("No image source found in the JSON data");
+            }
             log.info("imageSrc: {}", imageSrc);
 
             try (BufferedInputStream bufferedInputStream = Jsoup.connect(imageSrc)
@@ -44,14 +61,6 @@ public class MenuCrawler {
         } catch (IOException e) {
             throw new ImageCrawlException(e);
         }
-    }
-
-    private static String getImageSrc(String url, Element image) {
-        String imageSrc = image.attr("src");
-        if (!imageSrc.startsWith("http")) {
-            imageSrc = url + imageSrc;
-        }
-        return imageSrc;
     }
 
 }

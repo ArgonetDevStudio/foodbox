@@ -1,5 +1,6 @@
 package shanepark.foodbox.integration;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -47,8 +48,8 @@ public class IntegrationTest {
     }
 
     private Path crawlImage() {
-        MenuCrawler crawler = new MenuCrawler();
-        CrawlConfig crawlConfig = new CrawlConfig(CRAWL_URL, CRAWL_CSS_SELECTOR, CRAWL_IMAGE_INDEX);
+        MenuCrawler crawler = new MenuCrawler(new ObjectMapper());
+        CrawlConfig crawlConfig = new CrawlConfig(CRAWL_URL, CRAWL_CSS_SELECTOR, CRAWL_IMAGE_EXPR, CRAWL_IMAGE_INDEX);
         return crawler.getImage(crawlConfig);
     }
 

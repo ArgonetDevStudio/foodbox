@@ -51,7 +51,6 @@ class ImageParserClovaTest {
         // When
         when(naverClovaApi.clovaRequest(anyString())).thenReturn(clovaResponse);
         List<ParsedMenu> parse = imageParserClova.parse(nov11.getFile().toPath());
-        System.err.println("parse = " + parse);
 
         // Then
         assertThat(parse).hasSize(10);

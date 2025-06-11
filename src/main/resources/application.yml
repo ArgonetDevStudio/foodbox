@@ -6,9 +6,10 @@ foodbox:
   db-file-dir: ${DB_FILE_DIR:"/foodbox/db"}
 
 crawl:
-  crawl-url: ${CRAWL_URL:https://foodboxofficial.modoo.at/?link=e3pla1lv}
-  css-selector: .gallery_img img
+  crawl-url: ${CRAWL_URL:https://m.site.naver.com/19Jks}
+  css-selector: script#__NEXT_DATA__
   image-index: 1
+  crawl-image-expr: ${CRAWL_IMAGE_EXPR:/props/pageProps/qrDetail/sessions}
 
 slack:
   slack-token: ${SLACK_TOKEN:"YOUR_SLACK_TOKEN_HERE"}
