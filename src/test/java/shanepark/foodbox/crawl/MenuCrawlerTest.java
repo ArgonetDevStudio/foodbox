@@ -1,5 +1,6 @@
 package shanepark.foodbox.crawl;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -11,12 +12,12 @@ import static shanepark.foodbox.integration.TestConstant.*;
 
 class MenuCrawlerTest {
 
-    private final MenuCrawler menuCrawler = new MenuCrawler();
+    private final MenuCrawler menuCrawler = new MenuCrawler(new ObjectMapper());
 
     @Test
     void getImage() throws IOException {
         // When
-        Path path = menuCrawler.getImage(new CrawlConfig(CRAWL_URL, CRAWL_CSS_SELECTOR, CRAWL_IMAGE_INDEX));
+        Path path = menuCrawler.getImage(new CrawlConfig(CRAWL_URL, CRAWL_CSS_SELECTOR, CRAWL_IMAGE_EXPR, CRAWL_IMAGE_INDEX));
 
         // Then
         assertThat(path).isNotNull();

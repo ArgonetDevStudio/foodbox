@@ -12,5 +12,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class CrawlConfig {
     private final String crawlUrl;
     private final String cssSelector;
+    private final String crawlImageExpr;
     private final int imageIndex;
 }

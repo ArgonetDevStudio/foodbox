@@ -3,7 +3,6 @@ package shanepark.foodbox.api.repository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -13,15 +12,11 @@ import shanepark.foodbox.api.domain.Menu;
 import java.io.File;
 import java.io.IOException;
 import java.time.LocalDate;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 
 @Repository
 @Slf4j
 public class MenuRepository {
-    private final ConcurrentHashMap<LocalDate, Menu> menuMap = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper;
     private final File dbFile;
 
@@ -32,9 +27,10 @@ public class MenuRepository {
     }
 
     @PostConstruct
-    public void loadFromFile() {
+    public Map<LocalDate, Menu> loadFromFile() {
+        Map<LocalDate, Menu> menuMap = new HashMap<>();
         if (dbFile.length() == 0) {
-            return;
+            return menuMap;
         }
         try {
             List<Menu> loaded = objectMapper.readValue(dbFile, new TypeReference<>() {
@@ -46,10 +42,10 @@ public class MenuRepository {
             log.error("Failed to create menu data file", e);
             System.exit(1);
         }
+        return menuMap;
     }
 
-    @PreDestroy
-    public void flush() {
+    public void flush(Map<LocalDate, Menu> menuMap) {
         File tempFile = new File(dbFile.getAbsolutePath() + ".tmp");
         try {
             List<Menu> saveTarget = menuMap.values()
@@ -66,19 +62,20 @@ public class MenuRepository {
     }
 
     public Optional<Menu> findByDate(LocalDate date) {
-        return Optional.ofNullable(menuMap.get(date));
+        return Optional.ofNullable(loadFromFile().get(date));
     }
 
     public List<Menu> findAll() {
-        return menuMap.values().stream()
+        return loadFromFile().values().stream()
                 .sorted(Comparator.comparingLong(m -> m.getDate().toEpochDay()))
                 .toList().reversed();
     }
 
     public void saveAll(List<Menu> menus) {
+        Map<LocalDate, Menu> menuMap = loadFromFile();
         for (Menu menu : menus) {
             menuMap.put(menu.getDate(), menu);
         }
-        flush();
+        flush(menuMap);
     }
 }
