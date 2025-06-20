@@ -69,15 +69,6 @@ public class ParsedMenu {
                 continue;
             menus.add(m);
         }
-
-        if (!menus.isEmpty()) {
-            highlightSalad();
-        }
-    }
-
-    private void highlightSalad() {
-        String lastMenu = menus.removeLast();
-        menus.add(String.format("[%s]", lastMenu));
     }
 
     @Override

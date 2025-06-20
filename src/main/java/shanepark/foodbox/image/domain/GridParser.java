@@ -14,7 +14,6 @@ public class GridParser {
     private int menu2DateStart = Integer.MAX_VALUE;
     private int menu2DateEnd = -1;
 
-    public static final int WARNING_TEXT = 1335; // 식자재 공급에 따라 변경될 수 있다는 경고 문구의 y 좌표. 향후 몇번 수정 여부를 추적 해야함.
     public static final int GAP = 2;
 
     private final Pattern DATE_PATTERN = Pattern.compile("\\d{1,2}일");
@@ -42,7 +41,7 @@ public class GridParser {
         }
         int midOfMonday = getMidX(mondayVertices);
         int midOfTuesday = getMidX(tuesdayVertices);
-        width = midOfTuesday - midOfMonday - (GAP / 2);
+        width = midOfTuesday - midOfMonday - GAP;
         startX = midOfMonday - (width / 2) - GAP;
     }
 
@@ -89,10 +88,6 @@ public class GridParser {
 
     public int getRow1DateHeight() {
         return menu1DateEnd - menu1DateStart;
-    }
-
-    public int getRow1MenuHeight() {
-        return menu2DateStart - menu1DateEnd - GAP;
     }
 
     public int getRow2Start() {

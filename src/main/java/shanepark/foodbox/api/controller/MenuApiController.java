@@ -28,4 +28,10 @@ public class MenuApiController {
         return ApiResponse.success(menuService.findAll());
     }
 
+    @GetMapping(value = "/crawl")
+    public String crawl() {
+        menuService.crawl();
+        return "ok";
+    }
+
 }
