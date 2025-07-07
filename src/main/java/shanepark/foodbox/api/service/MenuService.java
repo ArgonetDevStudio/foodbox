@@ -86,6 +86,11 @@ public class MenuService {
             throw new RuntimeException(e);
         }
 
+        parseAndSave(image);
+        log.info("Crawling done. total time taken: {} ms", System.currentTimeMillis() - start);
+    }
+
+    public List<Menu> parseAndSave(Path image) {
         List<ParsedMenu> parsed = new ArrayList<>();
         try {
             parsed = imageParserClova.parse(image);
@@ -94,8 +99,9 @@ public class MenuService {
         }
 
         List<Menu> menus = parsed.stream().map(ParsedMenu::toMenuResponse).toList();
+        log.info("Saving menus: {}", parsed);
         menuRepository.saveAll(menus);
-        log.info("Crawling done. total time taken: {} ms  , : {}", System.currentTimeMillis() - start, parsed);
+        return menus;
     }
 
 }
