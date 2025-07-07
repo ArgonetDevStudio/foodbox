@@ -29,7 +29,7 @@ public class ImageParserClova implements ImageParser {
     private final Clock clock;
 
     final Pattern DATE_PATTERN = Pattern.compile("\\d{1,2}일");
-    final Pattern DAY_PATTERN = Pattern.compile("MON|TUE|WED|THU|FRI");
+    final Pattern DAY_PATTERN = Pattern.compile("MON|TUE|WED|THU|FRI|월|화|수|목|금");
 
     @Override
     public List<ParsedMenu> parse(Path path) throws IOException {

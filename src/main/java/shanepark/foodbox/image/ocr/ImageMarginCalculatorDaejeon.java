@@ -10,12 +10,14 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
 
+import static shanepark.foodbox.utils.ImageUtil.isBlack;
+
 @Component
 public class ImageMarginCalculatorDaejeon implements ImageMarginCalculator {
 
     @Override
     public List<DayRegion> calcParseRegions(BufferedImage image, JsonArray fields) {
-        GridParser gridParser = new GridParser(fields);
+        GridParser gridParser = new GridParser(image, fields);
         int WIDTH = gridParser.getWidth();
 
         List<DayRegion> list = new ArrayList<>();
@@ -31,7 +33,7 @@ public class ImageMarginCalculatorDaejeon implements ImageMarginCalculator {
             ParseRegion dateRegion = new ParseRegion(x, y, WIDTH, dayHeight);
             ParseRegion menuRegion = new ParseRegion(x, y + dayHeight, WIDTH, menuHeight);
             list.add(new DayRegion(dateRegion, menuRegion));
-            x += WIDTH + GridParser.GAP;
+            x += WIDTH + gridParser.getGap();
         }
         x = gridParser.getStartX();
         int row2MenuEndY = 0;
@@ -45,7 +47,7 @@ public class ImageMarginCalculatorDaejeon implements ImageMarginCalculator {
             ParseRegion dateRegion = new ParseRegion(x, y, WIDTH, dayHeight);
             ParseRegion menuRegion = new ParseRegion(x, y + dayHeight, WIDTH, menuHeight);
             list.add(new DayRegion(dateRegion, menuRegion));
-            x += WIDTH + GridParser.GAP;
+            x += WIDTH + gridParser.getGap();
         }
         return list;
     }
@@ -53,10 +55,9 @@ public class ImageMarginCalculatorDaejeon implements ImageMarginCalculator {
     private int findRowMenuEndY(BufferedImage image, int menuDateEnd, GridParser gridParser) {
         int height = image.getHeight();
         int blackLast = -1;
-        int x = gridParser.getStartX() + GridParser.GAP * 2;
+        int x = gridParser.getStartX() + gridParser.getGap() * 2;
         for (int y = menuDateEnd; y < height; y++) {
-            boolean isBlack = isBlack(image.getRGB(x, y));
-            if (!isBlack) {
+            if (!isBlack(image.getRGB(x, y))) {
                 continue;
             }
             if (blackLast == -1) {
@@ -69,13 +70,6 @@ public class ImageMarginCalculatorDaejeon implements ImageMarginCalculator {
             blackLast = y;
         }
         throw new IllegalStateException("Could not find row1 menu end Y");
-    }
-
-    boolean isBlack(int color) {
-        int r = (color >> 16) & 0xFF;
-        int g = (color >> 8) & 0xFF;
-        int b = color & 0xFF;
-        return r < 15 && g < 15 && b < 15;
     }
 
 }

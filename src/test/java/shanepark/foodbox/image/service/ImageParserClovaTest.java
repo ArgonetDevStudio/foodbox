@@ -1,5 +1,6 @@
 package shanepark.foodbox.image.service;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -18,6 +19,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
@@ -44,9 +46,9 @@ class ImageParserClovaTest {
         mockClock(LocalDate.of(2025, 6, 11));
         ImageParserClova imageParserClova = new ImageParserClova(imageMarginCalculatorOfficial, naverClovaApi, clock);
 
-        ClassPathResource clovaResponseResource = new ClassPathResource("clova/response.json");
+        ClassPathResource clovaResponseResource = new ClassPathResource("clova/response-20250609.json");
         String clovaResponse = new String(clovaResponseResource.getInputStream().readAllBytes());
-        ClassPathResource resource = new ClassPathResource("menu/menu-daejeon-1000034805.jpg");
+        ClassPathResource resource = new ClassPathResource("menu/20250609.jpg");
 
         // When
         when(naverClovaApi.clovaRequest(anyString())).thenReturn(clovaResponse);
@@ -77,9 +79,9 @@ class ImageParserClovaTest {
         mockClock(LocalDate.of(2025, 6, 23));
         ImageParserClova imageParserClova = new ImageParserClova(imageMarginCalculatorOfficial, naverClovaApi, clock);
 
-        ClassPathResource clovaResponseResource = new ClassPathResource("clova/response-1000035171.json");
+        ClassPathResource clovaResponseResource = new ClassPathResource("clova/response-20250623.json");
         String clovaResponse = new String(clovaResponseResource.getInputStream().readAllBytes());
-        ClassPathResource resource = new ClassPathResource("menu/1000035171.jpg");
+        ClassPathResource resource = new ClassPathResource("menu/20250623.jpg");
 
         // When
         when(naverClovaApi.clovaRequest(anyString())).thenReturn(clovaResponse);
@@ -104,6 +106,43 @@ class ImageParserClovaTest {
         assertThat(String.join(", ", parse.get(7).getMenus())).isEqualTo("흑미밥, 고기듬뿍마파두부, 양배추 듬뿍 계란전, 가라아게튀김1ps, 단호박견과류샐러드, 오이 무침, 가지 볶음, 소고기 뭇국");
         assertThat(String.join(", ", parse.get(8).getMenus())).isEqualTo("찹쌀밥, 통삼겹 수육, 제철 배추겉절이, 미니 돈까스튀김+케찹, 동그랑땡조림2ps, 고추&마늘, 쌈장, 단짠 무말랭이, 꽃게 어묵국");
         assertThat(String.join(", ", parse.get(9).getMenus())).isEqualTo("보리밥, 양념치킨&스마일감자, 삼색푸실리 파스타, 비엔나 소시지볶음, 마카로리 샐러드, 할라피뇨 고추참치, 배추김치, 감자 계란국");
+    }
+
+    @Test
+    @DisplayName("parse high quality image")
+    public void parse3() throws IOException {
+        // Given
+        ImageMarginCalculator imageMarginCalculatorOfficial = new ImageMarginCalculatorDaejeon();
+        mockClock(LocalDate.of(2025, 7, 7));
+        ImageParserClova imageParserClova = new ImageParserClova(imageMarginCalculatorOfficial, naverClovaApi, clock);
+
+        ClassPathResource clovaResponseResource = new ClassPathResource("clova/response-20250707.json");
+        String clovaResponse = new String(clovaResponseResource.getInputStream().readAllBytes());
+        ClassPathResource resource = new ClassPathResource("menu/20250707.jpg");
+
+        // When
+        when(naverClovaApi.clovaRequest(anyString())).thenReturn(clovaResponse);
+        List<ParsedMenu> parse = imageParserClova.parse(resource.getFile().toPath());
+
+        // Then
+        assertThat(parse).hasSize(10);
+
+        ParsedMenu first = parse.getFirst();
+        assertThat(first.getDate()).isEqualTo(LocalDate.of(2025, 7, 7));
+        for (ParsedMenu parsedMenu : parse) {
+            System.out.println(parsedMenu);
+        }
+
+        assertThat(String.join(", ", parse.get(0).getMenus())).isEqualTo("흑미밥, 팽이버섯 제육볶음, 두부네모랑땡2P, 어묵야채볶음, 콩고기조림, 양념 오이무침, 배추김치, 맑은 건새우 뭇국");
+        assertThat(String.join(", ", parse.get(1).getMenus())).isEqualTo("흰쌀밥, 치킨 가라아게, 바몬드커리, 야채 비빔만두, 햄 야채 콘샐러드, 유부 맛살 냉채무침, 파송송 단무지무침, 배추김치, 냉 우동국");
+        assertThat(String.join(", ", parse.get(2).getMenus())).isEqualTo("찹쌀밥, 묵은지 참치 어묵찜, 옛날 분홍 소시지 부침, 메추리알 곤약조림, 마카로니 샐러드, 조미어채 도리지무침, 아삭아삭 콩나물 무침, 감자 계란국");
+        assertThat(String.join(", ", parse.get(3).getMenus())).isEqualTo("기장밥, 슈프림 등심돈까스, 실곤약 들기름국수, 미트볼 와사비마요, 모듬수제오이피클, 후랑크햄 야채볶음, 깍두기, 유부장국");
+        assertThat(String.join(", ", parse.get(4).getMenus())).isEqualTo("흰쌀밥, 언양식불고기+야채무침, 씨앗고로케&케찹, 스팸 감자조림, 양념 소떡소떡, 고구마순 볶음, 배추김치, 황태 미역국");
+        assertThat(String.join(", ", parse.get(5).getMenus())).isEqualTo("기장밥, 갈비맛 닭안심, 찹스테이크+갈릭소스, 너비아니 부침, 도토리묵 무침, 미니 해쉬브라운, 맛살 메추리알 샐러드, 배추김치, 들깨 배추 된장국");
+        assertThat(String.join(", ", parse.get(6).getMenus())).isEqualTo("찹쌀밥, 중국식 불맛고추잡채, 싸먹는 찐 꽃방2ps, 계란장조림, 치킨너겟2ps+머스타드, 쥬키니호박볶음, 깍두기, 구수한 닭곰탕");
+        assertThat(String.join(", ", parse.get(7).getMenus())).isEqualTo("후리가케 라이스, 새우카츠&수제소스, (어린잎토핑), 부추고추장떡, 토마토미트볼조림3ps, 수제야채 참치볶음, 미역줄기 볶음, 백김치, 얼큰시원한 어묵탕");
+        assertThat(String.join(", ", parse.get(8).getMenus())).isEqualTo("흑미밥, 단짠 간장 불고기, 싸먹는 쌈배추+쌈장, 모듬콩조림, 비엔나소시지야채볶음, 마늘쫑 건새우 볶음, 깍두기, 아욱 된장국");
+        assertThat(String.join(", ", parse.get(9).getMenus())).isEqualTo("잡곡밥, 유니짜장 스파게티, 생선카츠&타르타르, 칠리 연두부튀김 1P, 매운사각어묵 볶음, 청경채 굴소스볶음, 배추김치, 우삼겹 짬뽕국");
     }
 
 }
