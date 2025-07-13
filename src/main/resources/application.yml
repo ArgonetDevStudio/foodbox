@@ -1,7 +1,10 @@
 spring:
   application:
     name: foodbox
-
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
 foodbox:
   db-file-dir: ${DB_FILE_DIR:"/foodbox/db"}
 

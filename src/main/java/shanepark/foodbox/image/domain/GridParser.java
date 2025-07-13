@@ -5,7 +5,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import lombok.Getter;
 
+import java.awt.image.BufferedImage;
 import java.util.regex.Pattern;
+
+import static shanepark.foodbox.utils.ImageUtil.isBlack;
 
 @Getter
 public class GridParser {
@@ -14,8 +17,7 @@ public class GridParser {
     private int menu2DateStart = Integer.MAX_VALUE;
     private int menu2DateEnd = -1;
 
-    public static final int WARNING_TEXT = 1335; // 식자재 공급에 따라 변경될 수 있다는 경고 문구의 y 좌표. 향후 몇번 수정 여부를 추적 해야함.
-    public static final int GAP = 2;
+    private final int gap;
 
     private final Pattern DATE_PATTERN = Pattern.compile("\\d{1,2}일");
     private final Pattern DAY_PATTERN = Pattern.compile("MON|TUE|WED|THU|FRI");
@@ -25,7 +27,7 @@ public class GridParser {
     private final int width;
     private final int startX;
 
-    public GridParser(JsonArray fields) {
+    public GridParser(BufferedImage image, JsonArray fields) {
         for (JsonElement e : fields) {
             JsonObject field = e.getAsJsonObject();
             String inferText = field.get("inferText").getAsString();
@@ -40,10 +42,33 @@ public class GridParser {
         if (mondayVertices == null || tuesdayVertices == null) {
             throw new IllegalStateException("월요일 또는 화요일 패턴이 발견되지 않았습니다.");
         }
+        this.gap = calcGap(image, mondayVertices);
         int midOfMonday = getMidX(mondayVertices);
         int midOfTuesday = getMidX(tuesdayVertices);
-        width = midOfTuesday - midOfMonday - (GAP / 2);
-        startX = midOfMonday - (width / 2) - GAP;
+        width = midOfTuesday - midOfMonday - gap;
+        startX = midOfMonday - (width / 2) - gap;
+    }
+
+    private int calcGap(BufferedImage image, JsonArray mondayVertices) {
+        JsonObject leftTop = mondayVertices.get(0).getAsJsonObject();
+        JsonObject leftBottom = mondayVertices.get(3).getAsJsonObject();
+        int x = leftTop.get("x").getAsInt();
+        int y = (leftTop.get("y").getAsInt() + leftBottom.get("y").getAsInt()) / 2;
+
+        while (!isBlack(image.getRGB(x, y))) {
+            if (--y == 0) {
+                throw new IllegalStateException("GAP을 찾을 수 없습니다. 이미지가 잘못되었거나, 패턴이 잘못되었습니다.");
+            }
+        }
+
+        int depth = 1;
+        while (isBlack(image.getRGB(x, y - depth))) {
+            depth++;
+            if (y - depth == 0) {
+                throw new IllegalStateException("GAP을 찾을 수 없습니다. 이미지가 잘못되었거나, 패턴이 잘못되었습니다.");
+            }
+        }
+        return depth;
     }
 
     public void processDayPattern(JsonObject field) {
@@ -89,10 +114,6 @@ public class GridParser {
 
     public int getRow1DateHeight() {
         return menu1DateEnd - menu1DateStart;
-    }
-
-    public int getRow1MenuHeight() {
-        return menu2DateStart - menu1DateEnd - GAP;
     }
 
     public int getRow2Start() {

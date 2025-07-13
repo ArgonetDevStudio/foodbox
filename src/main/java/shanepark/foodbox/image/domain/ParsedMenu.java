@@ -21,6 +21,7 @@ public class ParsedMenu {
     private final Pattern pattern = Pattern.compile("[월화수목금토일]\\(([A-Z]{3})\\)(\\d{1,2})일");
 
     public ParsedMenu(Clock clock, String dateStr) {
+        dateStr = adjustDateString(dateStr);
         Matcher matcher = pattern.matcher(dateStr);
         if (!matcher.matches()) {
             throw new IllegalArgumentException("날짜 형식이 잘못되었습니다: " + dateStr);
@@ -51,6 +52,10 @@ public class ParsedMenu {
         throw new IllegalArgumentException("날짜 계산이 불가능 합니다: " + dateStr);
     }
 
+    private String adjustDateString(String dateStr) {
+        return dateStr.replaceAll("윌", "월");
+    }
+
     private LocalDate buildDateSafe(LocalDate today, int monthOffset, int day) {
         try {
             return today.withDayOfMonth(1)
@@ -69,15 +74,6 @@ public class ParsedMenu {
                 continue;
             menus.add(m);
         }
-
-        if (!menus.isEmpty()) {
-            highlightSalad();
-        }
-    }
-
-    private void highlightSalad() {
-        String lastMenu = menus.removeLast();
-        menus.add(String.format("[%s]", lastMenu));
     }
 
     @Override
