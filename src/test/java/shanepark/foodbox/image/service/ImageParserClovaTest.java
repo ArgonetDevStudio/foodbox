@@ -92,9 +92,6 @@ class ImageParserClovaTest {
 
         ParsedMenu first = parse.getFirst();
         assertThat(first.getDate()).isEqualTo(LocalDate.of(2025, 6, 23));
-        for (ParsedMenu parsedMenu : parse) {
-            System.out.println(parsedMenu);
-        }
 
         assertThat(String.join(", ", parse.get(0).getMenus())).isEqualTo("흰쌀밥, 꽈리고추 간장불고기, 새우감자고로케, +머스타드, 수제양념 팝콘치킨볼, 오이들깨무침, 청포묵김무침, 배추김치, 매콤 콩나물국");
         assertThat(String.join(", ", parse.get(1).getMenus())).isEqualTo("흑미밥, 정통 닭볶음탕&감자, 참치 부추전, 헴 코울슬로, 양념 미트볼조림, 오늘의 반찬1종, 뻑김치, 팽이버섯 된장국");
@@ -129,9 +126,6 @@ class ImageParserClovaTest {
 
         ParsedMenu first = parse.getFirst();
         assertThat(first.getDate()).isEqualTo(LocalDate.of(2025, 7, 7));
-        for (ParsedMenu parsedMenu : parse) {
-            System.out.println(parsedMenu);
-        }
 
         assertThat(String.join(", ", parse.get(0).getMenus())).isEqualTo("흑미밥, 팽이버섯 제육볶음, 두부네모랑땡2P, 어묵야채볶음, 콩고기조림, 양념 오이무침, 배추김치, 맑은 건새우 뭇국");
         assertThat(String.join(", ", parse.get(1).getMenus())).isEqualTo("흰쌀밥, 치킨 가라아게, 바몬드커리, 야채 비빔만두, 햄 야채 콘샐러드, 유부 맛살 냉채무침, 파송송 단무지무침, 배추김치, 냉 우동국");
@@ -143,6 +137,40 @@ class ImageParserClovaTest {
         assertThat(String.join(", ", parse.get(7).getMenus())).isEqualTo("후리가케 라이스, 새우카츠&수제소스, (어린잎토핑), 부추고추장떡, 토마토미트볼조림3ps, 수제야채 참치볶음, 미역줄기 볶음, 백김치, 얼큰시원한 어묵탕");
         assertThat(String.join(", ", parse.get(8).getMenus())).isEqualTo("흑미밥, 단짠 간장 불고기, 싸먹는 쌈배추+쌈장, 모듬콩조림, 비엔나소시지야채볶음, 마늘쫑 건새우 볶음, 깍두기, 아욱 된장국");
         assertThat(String.join(", ", parse.get(9).getMenus())).isEqualTo("잡곡밥, 유니짜장 스파게티, 생선카츠&타르타르, 칠리 연두부튀김 1P, 매운사각어묵 볶음, 청경채 굴소스볶음, 배추김치, 우삼겹 짬뽕국");
+    }
+
+    @Test
+    @DisplayName("2025-07-21")
+    public void parse4() throws IOException {
+        // Given
+        ImageMarginCalculator imageMarginCalculatorOfficial = new ImageMarginCalculatorDaejeon();
+        mockClock(LocalDate.of(2025, 7, 18));
+        ImageParserClova imageParserClova = new ImageParserClova(imageMarginCalculatorOfficial, naverClovaApi, clock);
+
+        ClassPathResource clovaResponseResource = new ClassPathResource("clova/response-20250721.json");
+        String clovaResponse = new String(clovaResponseResource.getInputStream().readAllBytes());
+        ClassPathResource resource = new ClassPathResource("menu/20250721.jpg");
+
+        // When
+        when(naverClovaApi.clovaRequest(anyString())).thenReturn(clovaResponse);
+        List<ParsedMenu> parse = imageParserClova.parse(resource.getFile().toPath());
+
+        // Then
+        assertThat(parse).hasSize(10);
+
+        ParsedMenu first = parse.getFirst();
+        assertThat(first.getDate()).isEqualTo(LocalDate.of(2025, 7, 21));
+
+        assertThat(String.join(", ", parse.get(0).getMenus())).isEqualTo("찹쌀밥, 오리 연탄 불고기, 춘권튀김+칠리소스, 멸치 고추장볶음, 맛살 어묵볶음, 오복채 무침, 백김치, 시원한 콩나물 황태국");
+        assertThat(String.join(", ", parse.get(1).getMenus())).isEqualTo("흑미밥, 단짠양념 파 불고기, 오색 모둠전 2ps, 매콤 감자조림, 마늘쫑&알마늘장아찌, 향긋한 미나리무침, 배추김치, 들께 뭇국");
+        assertThat(String.join(", ", parse.get(2).getMenus())).isEqualTo("잡곡밥, 떡산적 구이+수제 소스, (눈꽃치즈토핑), 가래떡 김치부침개, 양파 소세지 볶음, 아삭 콩나물 무침, 새콤달콤 무생채무침, 대파김치, 얼 갈이 된장국");
+        assertThat(String.join(", ", parse.get(3).getMenus())).isEqualTo("햄 김치볶음밥, 하이라이스, (왕새우튀김토핑), 프렌치 설탕토스트, 양념 깻잎무침, 브로콜리 새우볶음, 달달 조미어치 볶음, 깍두기, 물 만둣국");
+        assertThat(String.join(", ", parse.get(4).getMenus())).isEqualTo("기장밥, 스팸두부 김치조림, 미나리 알새우전, 그레놀라 멸치볶음, 미니 메밀김치전병, 들께 무나물볶음, 배추김치, 사골 미역국");
+        assertThat(String.join(", ", parse.get(5).getMenus())).isEqualTo("보리밥, 로제눈꽃치즈 파스타, (칵테일 새우토핑), 케이준감자튀김+케찹, 계란 감자샐러드, 얼 갈이, 어묵채볶음, 무침, 깍두기, 두부 호박 된장국");
+        assertThat(String.join(", ", parse.get(6).getMenus())).isEqualTo("후리가케 라이스, 김치&피자 탕수육, 이호박 햄볶음, 수제 자장참치, 콘치즈볼+연유, 새콤달콤 오이탕탕이, 배 추김치, 순두부 짬뽕국");
+        assertThat(String.join(", ", parse.get(7).getMenus())).isEqualTo("[ 중복 ], 찹쌀밥, 안동간장찜닭&떡사리, 고기메밀전병 1P, 옥수수콘야채샐러드, 청경채 생무침, 유부 맛살볶음, 단짠무말랭이, 파송송 계란국");
+        assertThat(String.join(", ", parse.get(8).getMenus())).isEqualTo("흑미밥, 달달 마늘쫑 제육볶음, 모짜치즈 계란전, 꽈리고추 멸치볶음, 비엔나소세지 야채볶음, 브로콜리 마늘볶음, 배추김치, 맑은 감자국");
+        assertThat(String.join(", ", parse.get(9).getMenus())).isEqualTo("흰 쌀밥, 야채멘치 까스, +양배추샐러드(키위소스), 노릇노릇 부추전, 베이컨 감자볶음, 쫄깃한 느타리버섯, 볶음, 양념 마늘쫑 무침, 백김치, 어묵 김칫국");
     }
 
 }
