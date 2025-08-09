@@ -1,28 +1,17 @@
 spring:
   application:
     name: foodbox
-  servlet:
-    multipart:
-      max-file-size: 10MB
-      max-request-size: 10MB
 foodbox:
   db-file-dir: ${DB_FILE_DIR:"/foodbox/db"}
 
 crawl:
-  crawl-url: ${CRAWL_URL:https://m.site.naver.com/19Jks}
-  css-selector: script#__NEXT_DATA__
-  image-index: 1
-  crawl-image-expr: ${CRAWL_IMAGE_EXPR:/props/pageProps/qrDetail/sessions}
+  crawl-url: ${CRAWL_URL:http://www.msmfood.co.kr/page/sub2_7}
 
 slack:
   slack-token: ${SLACK_TOKEN:"YOUR_SLACK_TOKEN_HERE"}
   slack-channel: ${SLACK_CHANNEL:"YOUR_SLACK_CHANNEL_HERE"}
   user-name: "점심봇"
   slack-url: "https://hooks.slack.com/services"
-
-clova:
-  url: ${CLOVA_URL:"YOUR_CLOVA_URL_HERE"}
-  secret-key: ${CLOVA_SECRET_KEY:"YOUR_CLOVA_SECRET_KEY_HERE"}
 
 server:
   port: 80

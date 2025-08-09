@@ -8,7 +8,6 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import shanepark.foodbox.crawl.CrawlConfig;
-import shanepark.foodbox.image.ocr.clova.NaverClovaConfig;
 import shanepark.foodbox.slack.SlackConfig;
 
 import java.time.LocalDateTime;
@@ -22,7 +21,6 @@ public class FoodboxApplication {
 
     private final CrawlConfig crawlConfig;
     private final SlackConfig slackConfig;
-    private final NaverClovaConfig naverClovaConfig;
 
     @PostConstruct
     public void init() {
@@ -33,7 +31,6 @@ public class FoodboxApplication {
         log.info("OS: {}, arch: {}", os, arch);
 
         log.info("CrawlConfig: {}", crawlConfig);
-        log.info("naverClovaConfig: {}", naverClovaConfig);
         log.info("SlackConfig: {}", slackConfig);
         log.info("Time zone: {}", System.getProperty("user.timezone"));
         log.info("Current time: {}", LocalDateTime.now());

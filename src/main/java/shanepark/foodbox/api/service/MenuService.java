@@ -4,24 +4,16 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.util.DigestUtils;
 import shanepark.foodbox.api.domain.Menu;
 import shanepark.foodbox.api.domain.MenuResponse;
 import shanepark.foodbox.api.exception.MenuNotUploadedException;
 import shanepark.foodbox.api.repository.MenuRepository;
 import shanepark.foodbox.crawl.CrawlConfig;
 import shanepark.foodbox.crawl.MenuCrawler;
-import shanepark.foodbox.image.domain.ParsedMenu;
-import shanepark.foodbox.image.ocr.clova.ImageParserClova;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -31,9 +23,7 @@ public class MenuService {
 
     private final MenuRepository menuRepository;
     private final MenuCrawler menuCrawler;
-    private final ImageParserClova imageParserClova;
     private final CrawlConfig crawlConfig;
-    private String lastImageHash;
 
     @PostConstruct
     public void init() {
@@ -73,35 +63,12 @@ public class MenuService {
     public synchronized void crawl() {
         long start = System.currentTimeMillis();
         log.info("Start crawling menu");
-        Path image = menuCrawler.getImage(crawlConfig);
-
-        try {
-            String imageHash = DigestUtils.md5DigestAsHex(Files.readAllBytes(image));
-            if (Objects.equals(imageHash, lastImageHash)) {
-                log.info("The Image has already parsed before. Skip this crawling (upcoming menu may not be uploaded yet)");
-                return;
-            }
-            lastImageHash = imageHash;
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-
-        parseAndSave(image);
-        log.info("Crawling done. total time taken: {} ms", System.currentTimeMillis() - start);
-    }
-
-    public List<Menu> parseAndSave(Path image) {
-        List<ParsedMenu> parsed = new ArrayList<>();
-        try {
-            parsed = imageParserClova.parse(image);
-        } catch (Exception e) {
-            log.error("Failed to parse image with Clova", e);
-        }
-
-        List<Menu> menus = parsed.stream().map(ParsedMenu::toMenuResponse).toList();
-        log.info("Saving menus: {}", parsed);
+        
+        List<Menu> menus = menuCrawler.crawlMenus(crawlConfig);
+        log.info("Saving {} menus", menus.size());
         menuRepository.saveAll(menus);
-        return menus;
+        
+        log.info("Crawling done. total time taken: {} ms", System.currentTimeMillis() - start);
     }
 
 }

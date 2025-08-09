@@ -9,8 +9,6 @@ services:
       - TZ=Asia/Seoul
       - SLACK_TOKEN=${SLACK_TOKEN}
       - SLACK_CHANNEL=${SLACK_CHANNEL}
-      - CLOVA_URL=${CLOVA_URL}
-      - CLOVA_SECRET_KEY=${CLOVA_SECRET_KEY}
       - DB_FILE_DIR=/db
       - CRAWL_URL=${CRAWL_URL}
     volumes:
