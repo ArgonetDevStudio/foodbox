@@ -7,7 +7,8 @@
   let year = today.getFullYear();
   let month = today.getMonth();
   let daysInMonth = [];
-  let monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  let showDatePicker = false;
+  let pickerYear = today.getFullYear();
 
   async function fetchMenuData() {
     try {
@@ -96,6 +97,32 @@
     generateCalendar();
   }
 
+  function toggleDatePicker() {
+    showDatePicker = !showDatePicker;
+    if (showDatePicker) {
+      pickerYear = year; // 현재 연도로 초기화
+    }
+  }
+
+  function selectDate(newYear, newMonth) {
+    year = newYear;
+    month = newMonth;
+    showDatePicker = false;
+    generateCalendar();
+  }
+
+  function formatMonth(monthIndex) {
+    return String(monthIndex + 1).padStart(2, '0');
+  }
+
+  function prevPickerYear() {
+    pickerYear--;
+  }
+
+  function nextPickerYear() {
+    pickerYear++;
+  }
+
   onMount(() => {
     fetchMenuData();
   });
@@ -105,9 +132,44 @@
   <div class="calendar-container">
     <div class="calendar-header">
       <button on:click={prevMonth} class="nav-button">‹</button>
-      <h1 class="month-title">{monthNames[month]} {year}</h1>
+      <button on:click={toggleDatePicker} class="month-title clickable">{year} {formatMonth(month)}</button>
       <button on:click={nextMonth} class="nav-button">›</button>
     </div>
+    
+    {#if showDatePicker}
+      <!-- svelte-ignore a11y-click-events-have-key-events -->
+      <!-- svelte-ignore a11y-no-static-element-interactions -->
+      <div class="date-picker-overlay" on:click={toggleDatePicker}>
+        <!-- svelte-ignore a11y-click-events-have-key-events -->
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <div class="date-picker" on:click|stopPropagation>
+          <div class="date-picker-header">
+            <h3>Select Month</h3>
+            <button on:click={toggleDatePicker} class="close-button">×</button>
+          </div>
+          
+          <!-- Year selector -->
+          <div class="year-selector">
+            <button on:click={prevPickerYear} class="year-nav-button">‹</button>
+            <h4 class="current-year">{pickerYear}</h4>
+            <button on:click={nextPickerYear} class="year-nav-button">›</button>
+          </div>
+          
+          <!-- Month grid -->
+          <div class="month-grid">
+            {#each Array(12) as _, monthIndex}
+              <button 
+                class="month-button" 
+                class:active={pickerYear === year && monthIndex === month}
+                on:click={() => selectDate(pickerYear, monthIndex)}
+              >
+                {formatMonth(monthIndex)}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
     <div class="days-grid">
       <div class="day-name">Sun</div>
       <div class="day-name">Mon</div>
@@ -250,7 +312,15 @@
     margin: 0;
     letter-spacing: 0.1em;
     text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
-    text-transform: uppercase;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+
+  .month-title.clickable:hover {
+    color: #cccccc;
+    text-shadow: 0 0 15px rgba(255, 255, 255, 1);
   }
 
   .nav-button {
@@ -435,6 +505,129 @@
     box-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
   }
 
+  .date-picker-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding-top: 5vh;
+    z-index: 1000;
+  }
+
+  .date-picker {
+    background: #000000;
+    border: 2px solid #ffffff;
+    border-radius: 0;
+    padding: 2rem;
+    max-width: 500px;
+    width: 90%;
+    font-family: 'Courier New', monospace;
+  }
+
+  .date-picker-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #ffffff;
+  }
+
+  .date-picker-header h3 {
+    color: #ffffff;
+    margin: 0;
+    font-size: 1.5rem;
+    font-family: 'Courier New', monospace;
+  }
+
+  .close-button {
+    background: transparent;
+    border: 1px solid #ffffff;
+    color: #ffffff;
+    font-size: 1.5rem;
+    width: 2rem;
+    height: 2rem;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: 'Courier New', monospace;
+  }
+
+  .close-button:hover {
+    background: #ffffff;
+    color: #000000;
+  }
+
+  .year-selector {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 1.5rem 0;
+    gap: 1rem;
+  }
+
+  .year-nav-button {
+    background: transparent;
+    border: 1px solid #ffffff;
+    color: #ffffff;
+    font-size: 1.5rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: 'Courier New', monospace;
+    transition: all 0.2s ease;
+  }
+
+  .year-nav-button:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .current-year {
+    color: #ffffff;
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: bold;
+    min-width: 4rem;
+    text-align: center;
+    font-family: 'Courier New', monospace;
+  }
+
+  .month-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.5rem;
+  }
+
+  .month-button {
+    background: transparent;
+    border: 1px solid #ffffff;
+    color: #ffffff;
+    padding: 0.75rem;
+    cursor: pointer;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    transition: all 0.2s ease;
+  }
+
+  .month-button:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .month-button.active {
+    background: #ffffff;
+    color: #000000;
+    font-weight: bold;
+  }
+
   @media (max-width: 768px) {
     :global(body) {
       padding: 12px;
@@ -448,6 +641,15 @@
     
     .month-title {
       font-size: 2.2rem;
+    }
+    
+    .date-picker {
+      width: 95%;
+      padding: 1rem;
+    }
+    
+    .month-grid {
+      grid-template-columns: repeat(4, 1fr);
     }
     
     .nav-button {
