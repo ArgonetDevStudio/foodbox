@@ -2,7 +2,21 @@
   "permissions": {
     "allow": [
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(docker compose build:*)",
+      "Bash(docker compose:*)",
+      "Bash(./gradlew:*)",
+      "Bash(curl:*)",
+      "Bash(docker exec:*)",
+      "Bash(rm:*)",
+      "Bash(cd:*)",
+      "Bash(npm run dev:*)",
+      "Bash(node:*)",
+      "Bash(nvm use:*)",
+      "Bash(nvm install:*)",
+      "Bash(npm install)",
+      "Bash(source:*)",
+      "Bash(nvm:*)"
     ],
     "deny": []
   }

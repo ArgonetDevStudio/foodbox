@@ -87,7 +87,7 @@ src/
 ### Menu API
 
 - `GET /api/menu/today` - Get today's menu
-- `GET /api/menu/all` - Get all available menus
+- `GET /api/menu` - Get all available menus
 - `POST /api/menu/crawl` - Manually trigger menu crawling
 
 ### Slack Notification

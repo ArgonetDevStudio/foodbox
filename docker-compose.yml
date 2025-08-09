@@ -1,10 +1,8 @@
 services:
-  food-box:
+  foodbox-backend:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "80:80"
     environment:
       - TZ=Asia/Seoul
       - SLACK_TOKEN=${SLACK_TOKEN}
@@ -13,3 +11,20 @@ services:
       - CRAWL_URL=${CRAWL_URL}
     volumes:
       - ./db:/db
+    networks:
+      - foodbox-network
+
+  foodbox-frontend:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - foodbox-backend
+    networks:
+      - foodbox-network
+
+networks:
+  foodbox-network:
+    driver: bridge
