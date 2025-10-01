@@ -16,7 +16,9 @@
       "Bash(nvm install:*)",
       "Bash(npm install)",
       "Bash(source:*)",
-      "Bash(nvm:*)"
+      "Bash(nvm:*)",
+      "Bash(cat:*)",
+      "Bash(git restore:*)"
     ],
     "deny": []
   }

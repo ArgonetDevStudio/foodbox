@@ -9,6 +9,8 @@ services:
       - SLACK_CHANNEL=${SLACK_CHANNEL}
       - DB_FILE_DIR=/db
       - CRAWL_URL=${CRAWL_URL}
+      - CLOVA_URL=${CLOVA_URL}
+      - CLOVA_SECRET_KEY=${CLOVA_SECRET_KEY}
     volumes:
       - ./db:/db
     networks:
@@ -20,8 +22,12 @@ services:
       dockerfile: Dockerfile
     ports:
       - "80:80"
+      - "443:443"
     depends_on:
       - foodbox-backend
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot
     networks:
       - foodbox-network
 

@@ -8,6 +8,10 @@ public class ImageCrawlException extends RuntimeException implements FoodboxExce
         super(e.getMessage(), e);
     }
 
+    public ImageCrawlException(String message) {
+        super(message);
+    }
+
     @Override
     public String getErrorCode() {
         return "IMAGE_CRAWL_ERROR";

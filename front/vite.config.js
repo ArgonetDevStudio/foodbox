@@ -8,9 +8,9 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://foodbox.o-r.kr',
+        target: 'http://localhost:8080',
         changeOrigin: true,
-        secure: true,
+        secure: false,
       }
     }
   },
