@@ -37,16 +37,15 @@ public class SlackNotifyService {
             return;
         }
 
-        MenuResponse menuResponse;
-        if (status == NotifyDate.BENTO_DAY) {
-            menuResponse = menuService.getTodayMenu(today);
-        } else {
-            menuResponse = new MenuResponse(today.toString(), List.of(status.getMessage()), true);
-        }
+        MenuResponse menuResponse = menuService.getTodayMenu(today);
 
         if (!menuResponse.isValid()) {
             log.info("Invalid menu. Skip notifying today's menu: {}", menuResponse);
             return;
+        }
+
+        if (status != NotifyDate.BENTO_DAY) {
+            menuResponse = new MenuResponse(today.toString(), List.of(status.getMessage()), true);
         }
 
         String message = createSlackMessage(menuResponse);
