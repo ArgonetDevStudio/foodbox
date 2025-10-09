@@ -169,6 +169,7 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate date = LocalDate.of(2025, 4, 23); // WEDNESDAY but not the last
         mockClock(date);
+        when(menuService.getTodayMenu(date)).thenReturn(new MenuResponse(date.toString(), List.of("menu1", "menu2", "menu3"), true));
 
         // When
         slackConfigSetup();
@@ -186,6 +187,7 @@ class SlackNotifyServiceTest {
         // Given
         LocalDate date = LocalDate.of(2025, 4, 30); // WEDNESDAY and it's the last
         mockClock(date);
+        when(menuService.getTodayMenu(date)).thenReturn(new MenuResponse(date.toString(), List.of("menu1", "menu2", "menu3"), true));
 
         // When
         slackConfigSetup();
@@ -195,6 +197,21 @@ class SlackNotifyServiceTest {
         verify(slackMessageSender, only()).sendMessage(anyString(), anyString(), payloadCaptor.capture());
         String slackMessage = payloadCaptor.getValue().text();
         assertThat(slackMessage).contains("외식");
+    }
+
+    @Test
+    @DisplayName("Should not notify on Wednesday when menu is invalid (holiday case)")
+    void wednesdayHoliday() throws IOException, InterruptedException {
+        // Given
+        LocalDate date = LocalDate.of(2025, 5, 7); // WEDNESDAY but holiday
+        mockClock(date);
+        when(menuService.getTodayMenu(date)).thenReturn(new MenuResponse(date.toString(), List.of("no menu"), false));
+
+        // When
+        slackNotifyService.notifyTodayMenu();
+
+        // Then
+        verify(slackMessageSender, never()).sendMessage(anyString(), anyString(), any(SlackPayload.class));
     }
 
     @Test
