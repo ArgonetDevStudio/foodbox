@@ -4,143 +4,268 @@ This file provides guidance to AI Agents when working with code in this reposito
 
 ## Project Overview
 
-Foodbox is a lunch menu notification system that crawls a food vendor's website daily, structures the menu data, and sends notifications via Slack. It consists of a Spring Boot backend (Java 21) and a Svelte frontend served via Nginx, deployed together using Docker Compose.
+Foodbox is a lunch menu notification system for Eisodosirak (이소도시락) vendor. It downloads menu images, extracts data via Naver Clova OCR, stores menus in a file-based database, and sends daily Slack notifications with special day handling logic.
 
-## Architecture
+**Tech Stack**: Spring Boot (Java 21) + Svelte 5 + Nginx + Docker Compose
 
-### Backend (Spring Boot)
-- **Main Package**: `src/main/java/shanepark/foodbox/`
-- **Key Modules**:
-  - `api/`: REST API layer with controllers, services, repositories, domain models, and configuration
-  - `crawl/`: HTML parsing logic using JSoup to extract menu data from vendor website
-  - `slack/`: Slack integration for automated notifications
+## Core Domain Models
 
-### Frontend (Svelte)
-- **Location**: `front/` directory
-- **Tech Stack**: Svelte 5 + Vite
-- **Deployment**: Static build served by Nginx, proxies `/api/*` requests to backend
+### Menu (api/domain/Menu.java)
+Core entity representing a single day's menu.
 
-### Data Flow
-1. Backend crawls vendor website HTML using JSoup (not OCR-based)
-2. Menu data is parsed and stored in file-based database (`./db/` directory)
-3. REST API exposes menu data to frontend
-4. Slack bot posts daily notifications on a schedule
-5. Frontend (Nginx on port 80) proxies API requests to backend service
+**Fields**:
+- `date: LocalDate` - Menu date
+- `menus: List<String>` - Menu items
+- `isValid: boolean` - Validation flag (true if menus.size() > 2)
 
-## Common Commands
+**Validation Rule**: A menu is considered valid only if it contains 3+ items. Invalid menus are filtered out during Slack notifications.
 
-### Local Development
+### MenuResponse (api/domain/MenuResponse.java)
+DTO for API responses. Java record wrapping Menu data with date as String.
 
-**Backend:**
-```bash
-./gradlew clean build           # Build the project
-./gradlew bootRun              # Run backend locally
-./gradlew test                 # Run all tests
-./gradlew test --tests MenuCrawlerTest  # Run specific test
-```
+### ParsedMenuEiso (image/domain/ParsedMenuEiso.java)
+Eisodosirak-specific parsed menu from OCR results.
 
-**Frontend:**
-```bash
-cd front
-npm install                    # Install dependencies
-npm run dev                    # Start dev server with hot reload
-npm run build                  # Build for production
-```
+**Key Logic**:
+- Parses Korean date format: `월/일` → `LocalDate`
+- Regex pattern: `(\\d{1,2})월\\s*(\\d{1,2})일`
+- **Year Inference**: Resolves ambiguous month/day to full date by finding closest date within ±45 days from today
+- Handles OCR typos: "윌" → "월"
 
-### Docker Deployment
+### NotifyDate (slack/domain/enums/NotifyDate.java)
+Enum defining notification behavior by day type.
 
-```bash
-# Build and start both services
-./gradlew clean build          # Must build backend first
-docker compose up -d           # Start services (frontend on port 80)
+**Values**:
+- `BENTO_DAY` - Regular menu notification (Mon/Tue/Thu/Fri)
+- `SALAD_DAY` - "데니스델리 🥗" (first 3 Wednesdays of month)
+- `EATING_OUT_DAY` - "외식 🍽" (last Wednesday of month)
+- `WEEKENDS` - Skip notification
 
-# View logs
-docker compose logs -f foodbox-backend
-docker compose logs -f foodbox-frontend
+**Logic**: `of(LocalDate)` determines day type. Wednesday classification uses: `month.length - dayOfMonth >= 7` to detect last week.
 
-# Rebuild after changes
-docker compose build
-docker compose up -d
-```
+## System Architecture
 
-### Testing
+### api/ - REST API Layer
 
-The project uses file-based HTML samples in `src/test/resources/` for realistic crawler testing. Tests use JUnit 5, Mockito, and AssertJ.
+**Controllers**:
+- `MenuApiController` - Menu endpoints (today, all, crawl, upload)
+- `SlackNotifyController` - Manual Slack notification trigger
+- `ErrorControllerAdvice` - Global exception handler
+
+**Services**:
+- `MenuService` - Core business logic: crawling, parsing, persistence
+  - `@PostConstruct init()` - Auto-crawls on startup if data is outdated
+  - `crawl()` - Downloads image, checks MD5 hash to prevent duplicate processing
+  - `getTodayMenu()` - Returns weekend message or triggers crawl if menu missing
+
+**Repository**:
+- `MenuRepository` - File-based CRUD operations on `./db/` directory
+
+**Configuration**:
+- `DbFileConfig` - Database directory path
+- `TimeConfig` - Clock bean for testable time operations
+- `ObjectMapperConfig` - JSON serialization settings
+
+### crawl/ - Image Downloading
+
+**MenuCrawler**:
+- `getMenuImage(CrawlConfig)` - PRIMARY: Downloads menu image from vendor website
+- `crawlMenus(CrawlConfig)` - LEGACY: JSoup HTML parsing (not actively used)
+
+### image/ - OCR Processing Pipeline
+
+**OCR Components** (image/ocr/clova/):
+- `NaverClovaApi` - HTTP client for Naver Clova OCR API
+- `ImageParserClovaEiso` - Parses Clova OCR response into menu data
+  - Divides image into day regions using ImageMarginCalculator
+  - Extracts date and menu text from each region
+  - Returns List<ParsedMenu>
+- `ImageMarginCalculatorEiso` - Calculates image region bounds for date/menu sections (Eisodosirak layout-specific)
+
+**Domain Models** (image/domain/):
+- `DayRegion` - Bounding box for single day's menu in image
+- `ParseRegion` - Generic region definition for OCR parsing
+- `ParsedMenu` - Generic parsed menu result
+
+### slack/ - Slack Integration
+
+**SlackNotifyService**:
+- `@Scheduled(cron = "0 0 9 * * *")` - Daily 9 AM notification
+- **Business Logic**:
+  1. Determine day type via `NotifyDate.of(today)`
+  2. Skip if weekends
+  3. Get today's menu from MenuService
+  4. Skip if menu is invalid (holiday detection)
+  5. Replace menu with special message for SALAD_DAY/EATING_OUT_DAY
+  6. Format message with date + day of week (Korean) + menu items
+  7. Send via SlackMessageSender
+
+**SlackMessageSender**:
+- Sends POST request to Slack webhook URL with SlackPayload
+
+**SlackConfig**:
+- Configuration properties for Slack integration
+
+## API Endpoints
+
+| Method | Endpoint | Purpose | Response |
+|--------|----------|---------|----------|
+| GET | `/api/menu/today` | Today's menu | `ApiResponse<MenuResponse>` |
+| GET | `/api/menu` | All menus | `ApiResponse<List<MenuResponse>>` |
+| GET | `/api/crawl` | Trigger crawling | Plain string |
+| POST | `/api/upload` | Upload image (max 10MB) | `ApiResponse<List<MenuResponse>>` |
+| GET | `/api/slack/notify` | Trigger notification | Plain string |
+
+**Note**: `/api/crawl` and `/api/slack/notify` should use POST for RESTful compliance but currently use GET.
 
 ## Configuration
 
 ### Environment Variables
-Required environment variables (see `.env.example`):
-- `SLACK_TOKEN`: Slack bot token for notifications
-- `SLACK_CHANNEL`: Target Slack channel (e.g., #lunch)
-- `CRAWL_URL`: Vendor website URL to crawl (default: http://www.msmfood.co.kr/page/sub2_7)
-- `DB_FILE_DIR`: Database file storage path (default: `/foodbox/db` in Docker, `./db` locally)
 
-### Application Configuration
-Configuration is in `src/main/resources/application.yml` with environment variable substitution. The backend runs on port 80 in both local and Docker environments.
+Create `.env` file based on `.env.example`:
 
-## Key Implementation Details
+```bash
+# Slack
+SLACK_TOKEN=xoxb-your-token
+SLACK_CHANNEL=#lunch
 
-### MenuCrawler (crawl/MenuCrawler.java)
-- Uses JSoup for HTML parsing (CSS selectors defined in config)
-- Returns `Optional<Menu>` with robust error handling
-- Parses dates and menu items from HTML structure
-- Test samples in `src/test/resources/sample-menu-page.html`
+# Crawling
+CRAWL_URL=https://eisodosirak.itpage.kr/bbs/board.php?bo_table=basic4
 
-### Nginx Reverse Proxy (front/nginx.conf)
-- Frontend serves static Svelte build on port 80
-- Proxies `/api/*` requests to `foodbox-backend:80`
-- Docker networking uses `foodbox-network` bridge
+# Naver Clova OCR (Required)
+CLOVA_URL=https://your-clova-endpoint
+CLOVA_SECRET_KEY=your-base64-secret-key
 
-### File-based Database
-- Menus stored as files in `./db/` directory (mounted as Docker volume)
-- MenuService auto-crawls on startup if data is outdated
-- No traditional database server required
+# Database (Optional)
+DB_FILE_DIR=/path/to/db  # Default: ./db (local), /foodbox/db (Docker)
+```
 
-### Adding New Menu Sources
-1. Update CSS selectors in crawler configuration
-2. Update `CRAWL_URL` environment variable
-3. Add new sample HTML file to `src/test/resources/`
-4. Update tests to validate new HTML structure
+### Application Profiles
 
-## Development Workflow
+**application.yml** (Production - Docker):
+- Server port: 80
+- Multipart max file size: 10MB
 
-When modifying the crawler:
-1. Save sample HTML from new vendor to `src/test/resources/`
-2. Update CSS selectors in `CrawlConfig` or `MenuCrawler`
-3. Run `./gradlew test --tests MenuCrawlerTest` to validate
-4. Rebuild with `./gradlew clean build`
-5. Restart Docker services if deployed
+**application-dev.yml** (Development):
+- Server port: 8080
+- Database: `/tmp/foodbox/db`
 
-When modifying the frontend:
-1. Make changes in `front/src/`
-2. Test locally with `npm run dev`
-3. Build with `npm run build`
-4. Rebuild Docker image: `cd front && docker build -t foodbox-frontend .`
+## Development Guide
 
-## API Endpoints
+### Build & Run
 
-- `GET /api/menu/today` - Today's menu
-- `GET /api/menu` - All available menus
-- `POST /api/menu/crawl` - Manually trigger crawling
-- `POST /slack/notify` - Trigger Slack notification
+```bash
+# Backend
+./gradlew clean build
+./gradlew bootRun              # Runs on port 8080 (dev profile)
+./gradlew test
+
+# Frontend
+cd front
+npm install
+npm run dev                    # Runs on port 5173, proxies API to localhost:8080
+npm run build
+
+# Docker
+docker compose up -d           # Frontend: 80/443, Backend: 80
+docker compose logs -f foodbox-backend
+```
+
+### Testing
+
+**Test Classes** (35 total source files):
+- `MenuRepositoryTest` - File persistence
+- `ImageMarginCalculatorEisoTest` - Region detection
+- `ImageParserClovaEisoTest` - OCR parsing, date inference
+- `SlackNotifyServiceTest` - 13 test cases covering all day types
+- `SlackMessageSenderTest` - Webhook integration
+
+**Test Resources**:
+- `eiso_202510.jpg` - Sample menu image
+- `eiso_202510.json` - Sample Clova OCR response
+
+### Workflow: Modifying Image Processing
+
+1. Save sample image to `src/test/resources/`
+2. Update region calculation in `ImageMarginCalculatorEiso`
+3. Update parsing logic in `ImageParserClovaEiso`
+4. Run `./gradlew test --tests ImageParserClovaEisoTest`
+5. Rebuild: `./gradlew clean build`
+6. Restart Docker: `docker compose restart foodbox-backend`
+
+### Workflow: Adding New Vendor
+
+1. Create `ImageParserClova{VendorName}` extending `ImageParserClova`
+2. Create `ImageMarginCalculator{VendorName}` implementing interface
+3. Add test image and OCR JSON to `src/test/resources/`
+4. Update `CRAWL_URL` in `.env`
+5. Update `MenuCrawler.getMenuImage()` if HTML structure differs
+6. Write test class validating OCR parsing
+
+### Workflow: Modifying Slack Logic
+
+1. Edit `SlackNotifyService` or `NotifyDate` enum
+2. Add test cases to `SlackNotifyServiceTest`
+3. Run `./gradlew test --tests SlackNotifyServiceTest`
+4. Deploy
+
+## Key Business Logic Details
+
+### Menu Validation
+- **Location**: `Menu.java:24`
+- **Rule**: `isValid = menus.size() > 2`
+- **Usage**: Slack notifications skip invalid menus (holiday detection)
+
+### Wednesday Special Day Detection
+- **Location**: `NotifyDate.java:31`
+- **Logic**: Last Wednesday = `month.length - dayOfMonth < 7`
+  - First 3 Wednesdays → SALAD_DAY
+  - Last Wednesday → EATING_OUT_DAY
+- **Test Coverage**: `SlackNotifyServiceTest` includes test for Wednesday falling on holiday (invalid menu skips notification)
+
+### Year Inference for Ambiguous Dates
+- **Location**: `ParsedMenuEiso.java:37-64`
+- **Problem**: OCR returns "10월 23일" without year
+- **Solution**: Try current year, previous year, next year; select date closest to today
+- **Constraint**: If closest candidate > 45 days away, fallback to year calculation
+
+### Duplicate Crawl Prevention
+- **Location**: `MenuService.java:81-86`
+- **Method**: MD5 hash of downloaded image stored in `lastImageHash`
+- **Behavior**: Skip parsing if hash matches previous crawl (vendor hasn't uploaded new menu yet)
 
 ## Comment Guidelines
 
-- Write production code without Korean comments; remove non-essential remarks rather than translating them.
-- Prefer expressing intent through clear method or variable names instead of inline comments.
-- If a comment is unavoidable (for example, in tests to explain fixtures or assertions), write it in concise English.
+- Write code without Korean comments
+- Prefer self-documenting method/variable names over inline comments
+- If comments are necessary (tests, complex logic), use concise English
 
-## Git Commit Policy & Convention
-**NEVER commit changes automatically or proactively.**
-- Only commit when the user explicitly asks for a commit with clear instructions like "커밋해줘", "commit this", "create a commit", etc.
-- Do not commit after completing tasks, even if the work is finished
-- Do not suggest committing unless specifically asked
-- Let the user decide when and what to commit
-- **When creating commit messages, analyze only the actual code changes since the last commit, not the conversation history.** The commit message should reflect the final code state and changes, not the iterative development process discussed in chat.
-- This rule is ABSOLUTE and must NEVER be violated
-- **Format:** `type: summary`
-    - `type` must be lowercase and chosen from the observed set `{feat, fix, chore, refactor}`. Use `chore` (not `chores`) for maintenance work. Prefer `docs`, `test`, `build`, or `ci` when more specific categories apply.
-    - `summary` is a concise, imperative English description (e.g., `fix: ensure duty modal opens on mobile`). Avoid sentence casing, trailing periods, or mixed languages.
-- **Body:** add a blank line after the summary if more context is required. Wrap at ~72 chars per line. Mention issue IDs only when relevant.
-- **Verification:** always run `git log --oneline -10` before committing to confirm the new message aligns with recent history. Reword (`git commit --amend`) if it deviates.
+## Git Commit Convention
+
+**NEVER commit automatically or proactively.**
+
+Only commit when user explicitly asks with phrases like "커밋해줘", "commit this", "create a commit".
+
+**Format**: `type: summary`
+
+- **type**: `feat`, `fix`, `chore`, `refactor`, `test`, `docs`, `build`, `ci` (lowercase)
+- **summary**: Imperative mood, no trailing period (e.g., "add Wednesday holiday detection")
+
+**Process**:
+1. Run `git log --oneline -10` to check recent commit style
+2. Analyze actual code changes (not conversation history)
+3. Write commit message matching project style
+4. Run `git status` and `git diff` before committing
+5. Commit with heredoc format for proper multiline messages
+
+**Example**:
+```bash
+git commit -m "$(cat <<'EOF'
+feat: add Wednesday holiday notification test
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+EOF
+)"
+```
