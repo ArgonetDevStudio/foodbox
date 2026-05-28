@@ -6,7 +6,7 @@ Foodbox downloads Eisodosirak menu images, parses them with Naver Clova OCR, sto
 
 ## Tech Stack
 
-- Backend: Spring Boot 3.3.5, Java 21, Gradle
+- Backend: Spring Boot 3.5.14, Java 25, Gradle
 - Frontend: Svelte 5, Vite
 - OCR: Naver Clova OCR
 - Crawling: JSoup, image download
@@ -17,7 +17,7 @@ Foodbox downloads Eisodosirak menu images, parses them with Naver Clova OCR, sto
 
 ### 1. Prerequisites
 
-- Java 21
+- Java 25
 - Node.js 20+
 - npm
 - Docker / Docker Compose, if running the production-like stack

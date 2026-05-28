@@ -6,7 +6,7 @@ This file provides guidance to AI Agents when working with code in this reposito
 
 Foodbox is a lunch menu notification system for Eisodosirak (이소도시락) vendor. It downloads menu images, extracts data via Naver Clova OCR, stores menus in a file-based database, and sends daily Slack notifications with special day handling logic.
 
-**Tech Stack**: Spring Boot (Java 21) + Svelte 5 + Nginx + Docker Compose
+**Tech Stack**: Spring Boot (Java 25) + Svelte 5 + Nginx + Docker Compose
 
 ## Core Domain Models
 
