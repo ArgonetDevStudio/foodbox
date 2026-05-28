@@ -21,8 +21,7 @@ public class NaverClovaApi {
 
     private final NaverClovaConfig naverClovaConfig;
     private final RestTemplate restTemplate = new RestTemplateBuilder()
-            .setConnectTimeout(Duration.ofSeconds(5))
-            .setReadTimeout(Duration.ofSeconds(10))
+            .requestFactorySettings(settings -> settings.withTimeouts(Duration.ofSeconds(5), Duration.ofSeconds(10)))
             .build();
 
     public String clovaRequest(String base64Image) {
