@@ -204,6 +204,63 @@ class ImageParserClovaEisoTest {
     }
 
     @Test
+    void parseNumericDateOnlyLayout() throws IOException {
+        // Given
+        Path imagePath = Paths.get("src/test/resources/eiso_202605.png");
+        Path jsonPath = Paths.get("src/test/resources/eiso_202605.json");
+
+        ImageMarginCalculatorEiso marginCalculator = new ImageMarginCalculatorEiso();
+        NaverClovaApi mockClovaApi = Mockito.mock(NaverClovaApi.class);
+
+        Clock fixedClock = Clock.fixed(
+                Instant.parse("2026-05-01T00:00:00Z"),
+                ZoneId.systemDefault()
+        );
+
+        ImageParserClovaEiso parser = new ImageParserClovaEiso(
+                marginCalculator,
+                mockClovaApi,
+                fixedClock
+        );
+
+        String jsonContent = Files.readString(jsonPath);
+        when(mockClovaApi.clovaRequest(anyString())).thenReturn(jsonContent);
+
+        // When
+        List<ParsedMenu> parsedMenus = parser.parse(imagePath);
+
+        // Then
+        assertThat(parsedMenus).hasSize(21);
+        assertThat(parsedMenus.stream()
+                .map(ParsedMenu::getDate)
+                .sorted()
+                .toList())
+                .containsExactly(
+                        LocalDate.of(2026, 5, 1),
+                        LocalDate.of(2026, 5, 4),
+                        LocalDate.of(2026, 5, 5),
+                        LocalDate.of(2026, 5, 6),
+                        LocalDate.of(2026, 5, 7),
+                        LocalDate.of(2026, 5, 8),
+                        LocalDate.of(2026, 5, 11),
+                        LocalDate.of(2026, 5, 12),
+                        LocalDate.of(2026, 5, 13),
+                        LocalDate.of(2026, 5, 14),
+                        LocalDate.of(2026, 5, 15),
+                        LocalDate.of(2026, 5, 18),
+                        LocalDate.of(2026, 5, 19),
+                        LocalDate.of(2026, 5, 20),
+                        LocalDate.of(2026, 5, 21),
+                        LocalDate.of(2026, 5, 22),
+                        LocalDate.of(2026, 5, 25),
+                        LocalDate.of(2026, 5, 26),
+                        LocalDate.of(2026, 5, 27),
+                        LocalDate.of(2026, 5, 28),
+                        LocalDate.of(2026, 5, 29)
+                );
+    }
+
+    @Test
     void testMenuContentParsing() throws IOException {
         // Given
         Path imagePath = Paths.get("src/test/resources/eiso_202510.jpg");

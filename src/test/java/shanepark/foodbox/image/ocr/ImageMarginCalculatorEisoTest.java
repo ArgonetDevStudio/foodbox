@@ -50,4 +50,25 @@ class ImageMarginCalculatorEisoTest {
                     region.menu().x(), region.menu().y(), region.menu().width(), region.menu().height());
         }
     }
+
+    @Test
+    void calcParseRegionsWithNumericDateOnlyLayout() throws IOException {
+        // Given
+        Path imagePath = Paths.get("src/test/resources/eiso_202605.png");
+        Path jsonPath = Paths.get("src/test/resources/eiso_202605.json");
+
+        BufferedImage image = ImageIO.read(imagePath.toFile());
+        String jsonContent = Files.readString(jsonPath);
+
+        JsonObject jsonObject = gson.fromJson(jsonContent, JsonObject.class);
+        JsonArray images = jsonObject.getAsJsonArray("images");
+        JsonObject imageObj = images.get(0).getAsJsonObject();
+        JsonArray fields = imageObj.getAsJsonArray("fields");
+
+        // When
+        List<DayRegion> dayRegions = calculator.calcParseRegions(image, fields);
+
+        // Then
+        assertThat(dayRegions).hasSize(25);
+    }
 }

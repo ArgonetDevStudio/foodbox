@@ -1,221 +1,229 @@
-# 🍽️ Foodbox
+# Foodbox
 
-## Overview
-
-### Preview
+Foodbox downloads Eisodosirak menu images, parses them with Naver Clova OCR, stores the results in a file-based database, and exposes the lunch menu through a web calendar and Slack notifications.
 
 ![preview](README.assets/preview.png)
 
-### Intro
+## Tech Stack
 
-Foodbox is a Spring Boot application designed to make it easy for employees to check the daily lunch menu. The lunch vendor posts the menu on their website as HTML, and this project automates the process of crawling and sharing that information with everyone. The key features include:
+- Backend: Spring Boot 3.3.5, Java 21, Gradle
+- Frontend: Svelte 5, Vite
+- OCR: Naver Clova OCR
+- Crawling: JSoup, image download
+- Storage: file-based JSON database
+- Deployment: Docker Compose, Nginx
 
-- **Web Crawling**: Fetching the daily menu from the food vendor's website using JSoup HTML parsing
-- **Data Structuring**: Analyzing and organizing the menu for each date into a structured format
-- **REST API**: Providing HTTP endpoints to access menu information
-- **Slack Integration**: Sending the lunch menu via a Slack bot at the beginning of each workday
-- **Automatic Scheduling**: Daily notifications to ensure everyone knows what's for lunch
+## Quick Start
 
-The goal is to ensure everyone has quick and easy access to the lunch menu, without needing to search for it manually.
+### 1. Prerequisites
 
-## Architecture
+- Java 21
+- Node.js 20+
+- npm
+- Docker / Docker Compose, if running the production-like stack
 
-### Technology Stack
+### 2. Environment Variables
 
-- **Backend**: Spring Boot 3.3.5 (Java 21)
-- **Web Crawling**: JSoup 1.15.3
-- **Database**: File-based storage with Spring Data
-- **Messaging**: Slack API integration
-- **Testing**: JUnit 5, Mockito, AssertJ
-- **Build Tool**: Gradle
+Create a `.env` file from `.env.example` before running the app locally.
 
-### Project Structure
-
-```
-src/
-├── main/java/shanepark/foodbox/
-│   ├── FoodboxApplication.java          # Main application entry point
-│   ├── api/
-│   │   ├── controller/                  # REST API controllers
-│   │   ├── domain/                      # Domain entities (Menu, MenuResponse, etc.)
-│   │   ├── service/                     # Business logic services
-│   │   ├── repository/                  # Data access layer
-│   │   ├── config/                      # Configuration classes
-│   │   └── exception/                   # Custom exceptions
-│   ├── crawl/
-│   │   ├── MenuCrawler.java            # Web crawling logic
-│   │   └── CrawlConfig.java            # Crawling configuration
-│   └── slack/
-│       ├── controller/                  # Slack webhook controllers
-│       ├── service/                     # Slack notification services
-│       └── domain/                      # Slack-related data structures
-└── test/
-    ├── resources/
-    │   └── sample-menu-page.html       # Test HTML samples
-    └── java/shanepark/foodbox/
-        └── crawl/
-            └── MenuCrawlerTest.java    # Comprehensive crawler tests
+```bash
+cp .env.example .env
 ```
 
-### Key Components
+Required values:
 
-#### MenuCrawler
-- **Purpose**: Crawls menu data from the vendor's website
-- **Technology**: JSoup for HTML parsing
-- **Features**: 
-  - Robust error handling with Optional-based parsing
-  - Configurable CSS selectors
-  - Date extraction and validation
-  - Menu item parsing and structuring
+```properties
+SLACK_TOKEN=your_slack_bot_token_here
+SLACK_CHANNEL=#your_slack_channel_here
+CRAWL_URL=https://eisodosirak.itpage.kr/bbs/board.php?bo_table=basic4
+CLOVA_URL=your_clova_api_url_here
+CLOVA_SECRET_KEY=your_clova_secret_key_here
+```
 
-#### MenuService
-- **Purpose**: Business logic for menu management
-- **Features**:
-  - Automatic crawling on startup if data is outdated
-  - Weekend handling (no lunch service)
-  - REST API integration
+`DB_FILE_DIR` is optional. The development profile uses `/tmp/foodbox/db` by default.
 
-#### Slack Integration
-- **Purpose**: Automated notifications to team members
-- **Features**:
-  - Configurable scheduling
-  - Custom message formatting
-  - Error handling and retry logic
+Docker Compose reads `.env` automatically. When running locally with `./gradlew bootRun`, export the environment variables in the same terminal first.
+
+```bash
+set -a
+source .env
+set +a
+```
+
+### 3. Run Backend
+
+For development, run the backend with the `dev` profile because the frontend Vite proxy forwards API requests to `localhost:8080`.
+
+```bash
+set -a
+source .env
+set +a
+SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
+```
+
+Check the backend:
+
+```bash
+curl http://localhost:8080/api/menu
+```
+
+### 4. Run Frontend
+
+Run the frontend in a separate terminal.
+
+```bash
+cd front
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` in your browser. Frontend `/api/*` requests are proxied to `http://localhost:8080` by `front/vite.config.js`.
+
+## Common Commands
+
+### Backend
+
+```bash
+./gradlew clean build
+./gradlew test
+SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
+```
+
+### Frontend
+
+```bash
+cd front
+npm install
+npm run dev
+npm run build
+npm run preview
+```
+
+### Docker Compose
+
+Build the backend JAR before starting Docker.
+
+```bash
+./gradlew clean build
+docker compose up -d
+docker compose logs -f foodbox-backend
+```
+
+Compose services:
+
+- `foodbox-backend`: Spring Boot app, container port 80
+- `foodbox-frontend`: Nginx serving Svelte build, host ports 80/443
+- `./db`: mounted to `/db` in the backend container
+- `/api/*`: proxied by Nginx to the backend service
+
+`front/nginx.conf` currently assumes the `foodbox.o-r.kr` domain and Let's Encrypt certificate paths. To test HTTPS locally with Docker, adjust the Nginx config or certificate mounts for your environment.
 
 ## API Endpoints
 
-### Menu API
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/api/menu/today` | Get today's menu |
+| `GET` | `/api/menu` | Get all stored menus |
+| `GET` | `/api/crawl` | Manually crawl and OCR-parse the menu image |
+| `POST` | `/api/upload` | Upload a menu image and OCR-parse it |
+| `GET` | `/api/slack/notify` | Manually send today's Slack notification |
 
-- `GET /api/menu/today` - Get today's menu
-- `GET /api/menu` - Get all available menus
-- `POST /api/menu/crawl` - Manually trigger menu crawling
+`/api/crawl` and `/api/slack/notify` change server-side state, but the current implementation uses `GET`.
 
-### Slack Notification
+## Project Structure
 
-- `POST /slack/notify` - Trigger Slack notifications
-
-## Configuration
-
-### Application Properties
-
-The application uses `application.yml` for configuration:
-
-```yaml
-spring:
-  application:
-    name: foodbox
-
-crawl:
-  crawl-url: ${CRAWL_URL:http://www.msmfood.co.kr/page/sub2_7}
-
-slack:
-  slack-token: ${SLACK_TOKEN:"YOUR_SLACK_TOKEN_HERE"}
-  slack-channel: ${SLACK_CHANNEL:"YOUR_SLACK_CHANNEL_HERE"}
-  user-name: "점심봇"
-  slack-url: "https://hooks.slack.com/services"
-
-foodbox:
-  db-file-dir: ${DB_FILE_DIR:"/foodbox/db"}
-
-server:
-  port: 80
+```text
+.
+├── src/main/java/shanepark/foodbox
+│   ├── api
+│   │   ├── controller      # REST API
+│   │   ├── domain          # Menu, ApiResponse, DTOs
+│   │   ├── repository      # file-based menu storage
+│   │   └── service         # menu crawl, parse, lookup flow
+│   ├── crawl               # vendor page/image crawling
+│   ├── image
+│   │   ├── domain          # parsed menu and OCR regions
+│   │   └── ocr             # Clova OCR client/parser and margin calculator
+│   └── slack               # Slack schedule, message formatting, sender
+├── src/main/resources
+│   ├── application.yml
+│   └── application-dev.yml
+└── front
+    ├── src                 # Svelte app
+    ├── vite.config.js      # dev API proxy to localhost:8080
+    └── nginx.conf          # production frontend/API proxy
 ```
 
-### Environment Variables
+## How It Works
 
-Create a `.env` file with the following variables:
+1. `MenuService` starts up and checks whether stored menu data is up to date.
+2. If data is missing or stale, `MenuCrawler` downloads the vendor menu image.
+3. The image hash is compared with the previous crawl to avoid duplicate OCR work.
+4. `ImageParserClovaEiso` sends the image to Naver Clova OCR and parses date/menu regions.
+5. Parsed menus are saved by `MenuRepository` in the configured DB directory.
+6. The Svelte app reads `/api/menu` and renders a monthly calendar.
+7. `SlackNotifyService` sends the daily 9 AM notification, with special Wednesday handling.
 
-```properties
-SLACK_TOKEN=your_slack_token_here
-SLACK_CHANNEL=#your_slack_channel_here
-CRAWL_URL=http://www.msmfood.co.kr/page/sub2_7
-DB_FILE_DIR=/path/to/database/directory
-```
+## Business Rules
 
-## Deployment
+- A menu is valid only when it has at least 3 menu items.
+- Invalid menus are skipped for Slack notifications and are treated like holiday/no-menu cases.
+- Weekends do not send lunch notifications.
+- Wednesdays are special:
+  - first three Wednesdays of a month: Dennis Deli salad day
+  - last Wednesday of a month: eating-out day
+- OCR dates that contain only month and day are resolved to the closest date within the current, previous, or next year window.
 
-### Prerequisites
-
-- Java 21+
-- Docker (optional)
-- Docker Compose (optional)
-
-### Local Development
-
-```bash
-git clone https://github.com/ArgonetDevStudio/foodbox.git
-cd foodbox
-./gradlew clean build
-./gradlew bootRun
-```
-
-### Docker Deployment
-
-```bash
-git clone https://github.com/ArgonetDevStudio/foodbox.git
-cd foodbox
-./gradlew clean build
-docker compose up -d
-```
-
-### Testing
+## Tests
 
 Run all tests:
+
 ```bash
 ./gradlew test
 ```
 
-Run specific test class:
+Focused test examples:
+
 ```bash
-./gradlew test --tests MenuCrawlerTest
+./gradlew test --tests MenuRepositoryTest
+./gradlew test --tests ImageMarginCalculatorEisoTest
+./gradlew test --tests ImageParserClovaEisoTest
+./gradlew test --tests SlackNotifyServiceTest
+./gradlew test --tests SlackMessageSenderTest
 ```
 
-## Development
+OCR parser tests use sample image/OCR resources under `src/test/resources`.
 
-### Adding New Menu Sources
+## Development Notes
 
-1. Create a new crawler implementation following the `MenuCrawler` pattern
-2. Add appropriate CSS selectors for the new website structure
-3. Configure the new URL in `application.yml`
-4. Add comprehensive tests with sample HTML files
+### Updating Image Parsing
 
-### Extending Slack Integration
+1. Add or update sample menu images and OCR JSON under `src/test/resources`.
+2. Adjust region detection in `ImageMarginCalculatorEiso`.
+3. Adjust parsing in `ImageParserClovaEiso` or `ParsedMenuEiso`.
+4. Run `./gradlew test --tests ImageParserClovaEisoTest`.
+5. Run `./gradlew clean build`.
 
-1. Modify `SlackNotifyService` for new notification patterns
-2. Add new message templates in the Slack domain objects
-3. Configure additional webhook endpoints if needed
+### Updating Slack Logic
 
-### Testing Strategy
+1. Update `SlackNotifyService` or `NotifyDate`.
+2. Add or update cases in `SlackNotifyServiceTest`.
+3. Run `./gradlew test --tests SlackNotifyServiceTest`.
 
-The project uses comprehensive testing with:
-- **Unit Tests**: Mock-based testing for individual components
-- **Integration Tests**: File-based HTML samples for realistic crawling tests
-- **Test Data**: Sample HTML files in `src/test/resources/`
+### Adding a New Vendor
+
+1. Create a vendor-specific `ImageParserClova{Vendor}`.
+2. Create a vendor-specific `ImageMarginCalculator{Vendor}`.
+3. Add image/OCR fixtures under `src/test/resources`.
+4. Update `CRAWL_URL`.
+5. Update `MenuCrawler.getMenuImage()` if the vendor page structure differs.
+6. Add parser tests before deploying.
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **Crawling Fails**: Check if the target website structure has changed
-2. **Slack Notifications Not Working**: Verify token and channel configuration
-3. **Date Parsing Issues**: Check if the website's date format has changed
-
-### Logging
-
-The application provides detailed logging for:
-- Crawling operations and results
-- Menu parsing and validation
-- Slack notification attempts
-- Configuration validation on startup
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Add comprehensive tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License.
+- Frontend shows no data: confirm the backend is running on `localhost:8080` and `curl http://localhost:8080/api/menu` returns JSON.
+- Frontend API calls fail in dev: check `front/vite.config.js`; the proxy target should match the backend port.
+- Backend starts on port 80: run with `SPRING_PROFILES_ACTIVE=dev` for port 8080.
+- OCR parsing fails: verify `CLOVA_URL` and `CLOVA_SECRET_KEY`, then inspect parser tests and OCR fixtures.
+- Slack notification fails: verify Slack webhook token/channel config and run `GET /api/slack/notify` manually.
+- Docker frontend fails on HTTPS locally: `front/nginx.conf` expects production certificate paths for `foodbox.o-r.kr`.
