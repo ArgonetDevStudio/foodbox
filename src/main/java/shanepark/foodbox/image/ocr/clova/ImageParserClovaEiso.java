@@ -34,6 +34,7 @@ public class ImageParserClovaEiso implements ImageParser {
     private final Clock clock;
 
     final Pattern DATE_PATTERN = Pattern.compile("\\d{1,2}월\\s*\\d{1,2}일");
+    final Pattern DAY_NUMBER_PATTERN = Pattern.compile("\\d{1,2}");
 
     @Override
     public List<ParsedMenu> parse(Path path) throws IOException {
@@ -135,7 +136,16 @@ public class ImageParserClovaEiso implements ImageParser {
     private boolean isDateToken(String inferText) {
         return DATE_PATTERN.matcher(inferText).find()
                 || inferText.matches("\\d{1,2}월")
-                || inferText.matches("\\d{1,2}일");
+                || inferText.matches("\\d{1,2}일")
+                || isDayNumberToken(inferText);
+    }
+
+    private boolean isDayNumberToken(String inferText) {
+        if (!DAY_NUMBER_PATTERN.matcher(inferText).matches()) {
+            return false;
+        }
+        int day = Integer.parseInt(inferText);
+        return day >= 1 && day <= 31;
     }
 
     private void mergeDateTexts(List<DayRegion> dayRegions,
@@ -151,6 +161,11 @@ public class ImageParserClovaEiso implements ImageParser {
                     .map(dateText -> dateText.text)
                     .collect(Collectors.joining(" "))
                     .replaceAll("\\s+", " ");
+            if (isDayNumberToken(mergedDate)) {
+                int month = LocalDate.now(clock).getMonthValue();
+                int day = Integer.parseInt(mergedDate);
+                mergedDate = String.format("%02d월 %02d일", month, day);
+            }
             dateMap.put(dayRegion, mergedDate);
         }
     }

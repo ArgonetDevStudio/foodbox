@@ -17,6 +17,8 @@ import java.util.regex.Pattern;
 public class ImageMarginCalculatorEiso implements ImageMarginCalculator {
 
     private final Pattern DATE_PATTERN = Pattern.compile("\\d{1,2}월\\s*\\d{1,2}일");
+    private final Pattern DATE_PART_PATTERN = Pattern.compile("\\d{1,2}(월|일)");
+    private final Pattern DAY_NUMBER_PATTERN = Pattern.compile("\\d{1,2}");
     private final Pattern WEEKDAY_PATTERN = Pattern.compile("월요일|화요일|수요일|목요일|금요일");
 
     @Override
@@ -26,7 +28,7 @@ public class ImageMarginCalculatorEiso implements ImageMarginCalculator {
 
         log.info("Found {} columns", columns.size());
 
-        List<DateInfo> dateInfos = collectDateInfos(fields);
+        List<DateInfo> dateInfos = collectDateInfos(fields, weekdayInfos);
         Map<Integer, List<DateInfo>> rowMap = groupByRow(dateInfos);
         List<Integer> sortedRows = sortedRowKeys(rowMap.keySet());
 
@@ -102,7 +104,8 @@ public class ImageMarginCalculatorEiso implements ImageMarginCalculator {
             int centerX = getMiddleX(vertices);
             int left = getLeftX(vertices);
             int right = getRightX(vertices);
-            weekdayInfos.add(new WeekdayInfo(inferText, centerX, left, right));
+            int bottom = getBottomY(vertices);
+            weekdayInfos.add(new WeekdayInfo(inferText, centerX, left, right, bottom));
         }
         weekdayInfos.sort(Comparator.comparingInt(w -> w.centerX));
         if (weekdayInfos.size() != 5) {
@@ -140,21 +143,43 @@ public class ImageMarginCalculatorEiso implements ImageMarginCalculator {
         return columns;
     }
 
-    private List<DateInfo> collectDateInfos(JsonArray fields) {
+    private List<DateInfo> collectDateInfos(JsonArray fields, List<WeekdayInfo> weekdayInfos) {
         List<DateInfo> dateInfos = new ArrayList<>();
+        List<DateInfo> numericDateInfos = new ArrayList<>();
+        int weekdayBottom = weekdayInfos.stream()
+                .mapToInt(weekdayInfo -> weekdayInfo.bottom)
+                .max()
+                .orElse(0);
         for (JsonElement element : fields) {
             JsonObject field = element.getAsJsonObject();
             String inferText = field.get("inferText").getAsString();
-            if (!DATE_PATTERN.matcher(inferText).matches()) {
-                continue;
-            }
             JsonArray vertices = getVertices(field);
             int y = getMiddleY(vertices);
             int top = getTopY(vertices);
             int bottom = getBottomY(vertices);
-            dateInfos.add(new DateInfo(inferText, y, top, bottom));
+
+            if (DATE_PATTERN.matcher(inferText).matches()
+                    || DATE_PART_PATTERN.matcher(inferText).matches()) {
+                dateInfos.add(new DateInfo(inferText, y, top, bottom));
+                continue;
+            }
+
+            if (isNumericDateCandidate(inferText, y, weekdayBottom)) {
+                numericDateInfos.add(new DateInfo(inferText, y, top, bottom));
+            }
+        }
+        if (dateInfos.size() < 3) {
+            dateInfos.addAll(numericDateInfos);
         }
         return dateInfos;
+    }
+
+    private boolean isNumericDateCandidate(String inferText, int y, int weekdayBottom) {
+        if (!DAY_NUMBER_PATTERN.matcher(inferText).matches()) {
+            return false;
+        }
+        int day = Integer.parseInt(inferText);
+        return day >= 1 && day <= 31 && y > weekdayBottom;
     }
 
     private List<Integer> sortedRowKeys(Set<Integer> rowKeys) {
@@ -238,7 +263,7 @@ public class ImageMarginCalculatorEiso implements ImageMarginCalculator {
     private record DateInfo(String text, int y, int top, int bottom) {
     }
 
-    private record WeekdayInfo(String text, int centerX, int left, int right) {
+    private record WeekdayInfo(String text, int centerX, int left, int right, int bottom) {
     }
 
     private record ColumnInfo(int index, int startX, int width) {
