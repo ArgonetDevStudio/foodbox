@@ -158,8 +158,7 @@ public class ImageMarginCalculatorEiso implements ImageMarginCalculator {
             int top = getTopY(vertices);
             int bottom = getBottomY(vertices);
 
-            if (DATE_PATTERN.matcher(inferText).matches()
-                    || DATE_PART_PATTERN.matcher(inferText).matches()) {
+            if (isDateCandidate(inferText, y, weekdayBottom)) {
                 dateInfos.add(new DateInfo(inferText, y, top, bottom));
                 continue;
             }
@@ -170,8 +169,24 @@ public class ImageMarginCalculatorEiso implements ImageMarginCalculator {
         }
         if (dateInfos.size() < 3) {
             dateInfos.addAll(numericDateInfos);
+        } else {
+            int firstDateRowY = dateInfos.stream()
+                    .mapToInt(dateInfo -> dateInfo.y)
+                    .min()
+                    .orElse(Integer.MAX_VALUE);
+            numericDateInfos.stream()
+                    .filter(dateInfo -> dateInfo.y < firstDateRowY)
+                    .forEach(dateInfos::add);
         }
         return dateInfos;
+    }
+
+    private boolean isDateCandidate(String inferText, int y, int weekdayBottom) {
+        if (y <= weekdayBottom) {
+            return false;
+        }
+        return DATE_PATTERN.matcher(inferText).matches()
+                || DATE_PART_PATTERN.matcher(inferText).matches();
     }
 
     private boolean isNumericDateCandidate(String inferText, int y, int weekdayBottom) {
