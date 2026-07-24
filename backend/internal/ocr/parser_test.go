@@ -143,7 +143,7 @@ func TestParseRejectsMalformedInputs(t *testing.T) {
 }
 
 func fixtureDirectory() string {
-	return filepath.Join("..", "..", "..", "src", "test", "resources")
+	return "testdata"
 }
 
 func readTestFile(t *testing.T, path string) []byte {
