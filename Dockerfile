@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM node:24-alpine AS frontend-build
+FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS frontend-build
 
 WORKDIR /src/front
 
@@ -12,7 +12,7 @@ COPY front/ ./
 RUN npm run build
 
 
-FROM golang:1.26.5-alpine AS backend-build
+FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS backend-build
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build -trimpath -ldflags="-s -w" -o /out/foodbox ./cmd/foodbox
 
 
-FROM alpine:3.23 AS runtime
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime
 
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S -g 10001 foodbox \
