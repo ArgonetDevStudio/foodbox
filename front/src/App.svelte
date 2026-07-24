@@ -1,6 +1,11 @@
-
 <script>
   import { onMount } from 'svelte';
+
+  const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+  const MONTH_LABELS = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
 
   let menuData = [];
   let today = new Date();
@@ -9,8 +14,44 @@
   let daysInMonth = [];
   let showDatePicker = false;
   let pickerYear = today.getFullYear();
+  let loading = true;
+  let theme = 'light';
+
+  const THEME_KEY = 'foodbox-theme';
+
+  function applyTheme(next) {
+    theme = next;
+    document.documentElement.setAttribute('data-theme', next);
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch (_) {
+      /* storage may be unavailable */
+    }
+  }
+
+  function initTheme() {
+    let stored = null;
+    try {
+      stored = localStorage.getItem(THEME_KEY);
+    } catch (_) {
+      /* ignore */
+    }
+    if (stored === 'light' || stored === 'dark') {
+      applyTheme(stored);
+    } else {
+      const prefersDark =
+        window.matchMedia &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches;
+      applyTheme(prefersDark ? 'dark' : 'light');
+    }
+  }
+
+  function toggleTheme() {
+    applyTheme(theme === 'dark' ? 'light' : 'dark');
+  }
 
   async function fetchMenuData() {
+    loading = true;
     try {
       const response = await fetch('/api/menu');
       if (!response.ok) {
@@ -18,66 +59,81 @@
       }
       const data = await response.json();
       menuData = data.data || [];
-      generateCalendar();
     } catch (error) {
-      console.error("Could not fetch menu data:", error);
+      console.error('Could not fetch menu data:', error);
+    } finally {
+      loading = false;
+      generateCalendar();
     }
   }
 
   function getMenuForDate(targetYear, targetMonth, targetDay) {
-    const menu = menuData.find(item => {
+    const menu = menuData.find((item) => {
       const itemDate = new Date(item.date);
-      return itemDate.getFullYear() === targetYear && itemDate.getMonth() === targetMonth && itemDate.getDate() === targetDay;
+      return (
+        itemDate.getFullYear() === targetYear &&
+        itemDate.getMonth() === targetMonth &&
+        itemDate.getDate() === targetDay
+      );
     });
     return menu ? menu.menus : [];
   }
 
   function generateCalendar() {
     const date = new Date(year, month, 1);
-    const firstDay = date.getDay(); // 0 for Sunday, 6 for Saturday
+    const firstDay = date.getDay();
     const daysInCurrentMonth = new Date(year, month + 1, 0).getDate();
     const daysInPrevMonth = new Date(year, month, 0).getDate();
-    
-    daysInMonth = [];
 
-    // Add days from previous month
+    const cells = [];
+
     for (let i = firstDay; i > 0; i--) {
       const prevMonthDay = daysInPrevMonth - i + 1;
-      const prevMonthDate = new Date(year, month - 1, prevMonthDay);
-      daysInMonth.push({
+      const d = new Date(year, month - 1, prevMonthDay);
+      cells.push({
         day: prevMonthDay,
+        weekday: d.getDay(),
         isCurrentMonth: false,
-        menus: getMenuForDate(prevMonthDate.getFullYear(), prevMonthDate.getMonth(), prevMonthDate.getDate())
+        menus: getMenuForDate(d.getFullYear(), d.getMonth(), d.getDate())
       });
     }
 
-    // Add days from current month
     for (let i = 1; i <= daysInCurrentMonth; i++) {
-      daysInMonth.push({
+      const d = new Date(year, month, i);
+      cells.push({
         day: i,
+        weekday: d.getDay(),
         isCurrentMonth: true,
         menus: getMenuForDate(year, month, i)
       });
     }
 
-    // Add days from next month to complete the last week only
-    const currentTotal = daysInMonth.length;
-    const remainingInLastWeek = 7 - (currentTotal % 7);
+    const remainingInLastWeek = 7 - (cells.length % 7);
     if (remainingInLastWeek < 7) {
       for (let i = 1; i <= remainingInLastWeek; i++) {
-        const nextMonthDate = new Date(year, month + 1, i);
-        daysInMonth.push({
+        const d = new Date(year, month + 1, i);
+        cells.push({
           day: i,
+          weekday: d.getDay(),
           isCurrentMonth: false,
-          menus: getMenuForDate(nextMonthDate.getFullYear(), nextMonthDate.getMonth(), nextMonthDate.getDate())
+          menus: getMenuForDate(d.getFullYear(), d.getMonth(), d.getDate())
         });
       }
     }
+
+    daysInMonth = cells;
   }
 
   function isToday(day) {
-    return day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+    return (
+      day === today.getDate() &&
+      month === today.getMonth() &&
+      year === today.getFullYear()
+    );
   }
+
+  $: isCurrentMonthView =
+    year === today.getFullYear() && month === today.getMonth();
 
   function prevMonth() {
     month--;
@@ -97,10 +153,16 @@
     generateCalendar();
   }
 
+  function goToday() {
+    year = today.getFullYear();
+    month = today.getMonth();
+    generateCalendar();
+  }
+
   function toggleDatePicker() {
     showDatePicker = !showDatePicker;
     if (showDatePicker) {
-      pickerYear = year; // 현재 연도로 초기화
+      pickerYear = year;
     }
   }
 
@@ -123,548 +185,665 @@
     pickerYear++;
   }
 
+  function handleKeydown(event) {
+    if (event.key === 'Escape' && showDatePicker) {
+      showDatePicker = false;
+    }
+  }
+
   onMount(() => {
+    initTheme();
     fetchMenuData();
   });
 </script>
 
+<svelte:window on:keydown={handleKeydown} />
+
 <main>
-  <div class="calendar-container">
-    <div class="calendar-header">
-      <button on:click={prevMonth} class="nav-button">‹</button>
-      <button on:click={toggleDatePicker} class="month-title clickable">{year} {formatMonth(month)}</button>
-      <button on:click={nextMonth} class="nav-button">›</button>
-    </div>
-    
-    {#if showDatePicker}
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="date-picker-overlay" on:click={toggleDatePicker}>
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <div class="date-picker" on:click|stopPropagation>
-          <div class="date-picker-header">
-            <h3>Select Month</h3>
-            <button on:click={toggleDatePicker} class="close-button">×</button>
-          </div>
-          
-          <!-- Year selector -->
-          <div class="year-selector">
-            <button on:click={prevPickerYear} class="year-nav-button">‹</button>
-            <h4 class="current-year">{pickerYear}</h4>
-            <button on:click={nextPickerYear} class="year-nav-button">›</button>
-          </div>
-          
-          <!-- Month grid -->
-          <div class="month-grid">
-            {#each Array(12) as _, monthIndex}
-              <button 
-                class="month-button" 
-                class:active={pickerYear === year && monthIndex === month}
-                on:click={() => selectDate(pickerYear, monthIndex)}
-              >
-                {formatMonth(monthIndex)}
-              </button>
-            {/each}
-          </div>
+  <div class="calendar-card">
+    <header class="cal-header">
+      <div class="title-block">
+        <div class="brand">
+          <span class="brand-emoji">🍱</span>
+          <span class="brand-text">이소도시락 점심 메뉴</span>
+        </div>
+        <button class="month-title" on:click={toggleDatePicker} aria-haspopup="dialog">
+          <span class="month-name">{MONTH_LABELS[month]}</span>
+          <span class="year-name">{year}</span>
+          <svg class="chevron-down" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="controls">
+        {#if !isCurrentMonthView}
+          <button class="today-button" on:click={goToday}>오늘</button>
+        {/if}
+        <button
+          class="theme-toggle"
+          on:click={toggleTheme}
+          aria-label={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}
+          title={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+        >
+          {#if theme === 'dark'}
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="2" />
+              <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+          {:else}
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          {/if}
+        </button>
+        <div class="nav-group">
+          <button class="nav-button" on:click={prevMonth} aria-label="이전 달">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button class="nav-button" on:click={nextMonth} aria-label="다음 달">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
         </div>
       </div>
-    {/if}
-    <div class="days-grid">
-      <div class="day-name">Sun</div>
-      <div class="day-name">Mon</div>
-      <div class="day-name">Tue</div>
-      <div class="day-name">Wed</div>
-      <div class="day-name">Thu</div>
-      <div class="day-name">Fri</div>
-      <div class="day-name">Sat</div>
+    </header>
+
+    <div class="weekday-row">
+      {#each WEEKDAYS as name, i}
+        <div class="weekday" class:sun={i === 0} class:sat={i === 6}>{name}</div>
+      {/each}
+    </div>
+
+    <div class="days-grid" class:loading>
       {#each daysInMonth as dayInfo}
-        <div class="day" class:today={dayInfo && dayInfo.isCurrentMonth && isToday(dayInfo.day)} class:other-month={!dayInfo.isCurrentMonth}>
-          <div class="day-number">{dayInfo.day}</div>
-          <ul class="menu-list">
-            {#each dayInfo.menus as menuItem}
-              <li>{menuItem}</li>
-            {/each}
-          </ul>
+        <div
+          class="day"
+          class:today={dayInfo.isCurrentMonth && isToday(dayInfo.day)}
+          class:other-month={!dayInfo.isCurrentMonth}
+          class:has-menu={dayInfo.menus.length > 0}
+        >
+          <div class="day-top">
+            <span
+              class="day-number"
+              class:sun={dayInfo.weekday === 0}
+              class:sat={dayInfo.weekday === 6}
+            >{dayInfo.day}</span>
+          </div>
+          {#if dayInfo.menus.length > 0}
+            <ul class="menu-list">
+              {#each dayInfo.menus as menuItem}
+                <li>{menuItem}</li>
+              {/each}
+            </ul>
+          {/if}
         </div>
       {/each}
     </div>
+
+    {#if loading}
+      <div class="overlay-hint">메뉴를 불러오는 중…</div>
+    {/if}
   </div>
 </main>
 
+{#if showDatePicker}
+  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+  <div class="picker-overlay" on:click={toggleDatePicker}>
+    <div class="picker" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
+      <div class="picker-header">
+        <h3>연월 선택</h3>
+        <button class="close-button" on:click={toggleDatePicker} aria-label="닫기">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="year-selector">
+        <button class="year-nav" on:click={prevPickerYear} aria-label="이전 해">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        <span class="current-year">{pickerYear}</span>
+        <button class="year-nav" on:click={nextPickerYear} aria-label="다음 해">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="month-grid">
+        {#each Array(12) as _, monthIndex}
+          <button
+            class="month-button"
+            class:active={pickerYear === year && monthIndex === month}
+            class:is-today={pickerYear === today.getFullYear() && monthIndex === today.getMonth()}
+            on:click={() => selectDate(pickerYear, monthIndex)}
+          >
+            {MONTH_LABELS[monthIndex]}
+          </button>
+        {/each}
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
-  :global(body) {
-    background: #000000;
-    font-family: 'Courier New', monospace;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
-    margin: 0;
-    padding: 20px;
-    box-sizing: border-box;
-    position: relative;
-    overflow-x: hidden;
-  }
-
-  :global(body::before) {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: 
-      repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 2px,
-        rgba(255, 255, 255, 0.02) 2px,
-        rgba(255, 255, 255, 0.02) 4px
-      );
-    pointer-events: none;
-    z-index: -1;
-  }
-
   main {
     width: 100%;
-    max-width: 1400px;
-    perspective: 1000px;
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: clamp(16px, 4vw, 48px);
   }
 
-  .calendar-container {
-    width: 100%;
-    background: #000000;
-    border-radius: 0;
-    box-shadow: 
-      inset 0 0 0 2px #ffffff,
-      0 0 20px rgba(255, 255, 255, 0.3);
-    display: flex;
-    flex-direction: column;
-    border: 2px solid #ffffff;
-    padding: 32px;
-    transform: none;
-    transition: all 0.3s ease;
+  .calendar-card {
     position: relative;
-    font-family: 'Courier New', monospace;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: clamp(20px, 3vw, 36px);
   }
 
-  .calendar-container::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: 
-      repeating-linear-gradient(
-        90deg,
-        transparent,
-        transparent 1px,
-        rgba(255, 255, 255, 0.05) 1px,
-        rgba(255, 255, 255, 0.05) 2px
-      );
-    z-index: -1;
-  }
-
-  .calendar-container:hover {
-    transform: none;
-    box-shadow: 
-      inset 0 0 0 2px #ffffff,
-      0 0 30px rgba(255, 255, 255, 0.5);
-  }
-
-  .calendar-header {
+  /* ---------- Header ---------- */
+  .cal-header {
     display: flex;
+    align-items: flex-end;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 2rem;
-    padding-bottom: 1.5rem;
-    border-bottom: 2px solid #ffffff;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 0;
-    padding: 1.5rem;
-    position: relative;
-    overflow: hidden;
-    border: 1px solid #ffffff;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 28px;
   }
 
-  .calendar-header::before {
-    content: '> CALENDAR.EXE';
-    position: absolute;
-    top: -25px;
-    left: 0;
-    width: 100%;
-    height: 20px;
-    background: #000000;
-    color: #ffffff;
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    padding: 2px 8px;
-    border: 1px solid #ffffff;
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+
+  .brand-emoji {
+    font-size: 1.1rem;
   }
 
   .month-title {
-    font-size: 2.8rem;
-    font-weight: 700;
-    color: #ffffff;
-    font-family: 'Courier New', monospace;
-    margin: 0;
-    letter-spacing: 0.1em;
-    text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+    display: inline-flex;
+    align-items: baseline;
+    gap: 12px;
     background: transparent;
     border: none;
+    padding: 4px 6px;
+    margin: -4px -6px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: all 0.3s ease;
+    color: var(--text);
+    transition: background 0.2s var(--ease);
   }
 
-  .month-title.clickable:hover {
-    color: #cccccc;
-    text-shadow: 0 0 15px rgba(255, 255, 255, 1);
+  .month-title:hover {
+    background: var(--surface-muted);
+  }
+
+  .month-name {
+    font-size: clamp(1.9rem, 4vw, 2.6rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+
+  .year-name {
+    font-size: clamp(1.1rem, 2.5vw, 1.5rem);
+    font-weight: 600;
+    color: var(--text-faint);
+    letter-spacing: -0.01em;
+  }
+
+  .chevron-down {
+    align-self: center;
+    color: var(--text-faint);
+    transition: transform 0.2s var(--ease), color 0.2s var(--ease);
+  }
+
+  .month-title:hover .chevron-down {
+    color: var(--accent);
+    transform: translateY(2px);
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .today-button {
+    height: 44px;
+    padding: 0 18px;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s var(--ease);
+  }
+
+  .today-button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .theme-toggle {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s var(--ease);
+  }
+
+  .theme-toggle:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    transform: rotate(-15deg);
+  }
+
+  .theme-toggle:active {
+    transform: scale(0.92);
+  }
+
+  .nav-group {
+    display: inline-flex;
+    gap: 6px;
+    padding: 5px;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
   }
 
   .nav-button {
-    background: #000000;
-    border: 2px solid #ffffff;
-    color: #ffffff;
-    font-size: 1.8rem;
-    font-weight: 600;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-muted);
     cursor: pointer;
-    border-radius: 0;
-    width: 56px;
-    height: 56px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    transition: all 0.3s ease;
-    box-shadow: none;
-    position: relative;
-    overflow: hidden;
-    font-family: 'Courier New', monospace;
-  }
-
-  .nav-button::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(255, 255, 255, 0.2);
-    opacity: 0;
-    transition: opacity 0.3s ease;
+    transition: all 0.18s var(--ease);
   }
 
   .nav-button:hover {
-    transform: none;
-    box-shadow: 0 0 15px rgba(255, 255, 255, 0.8);
-    color: #000000;
-    background: #ffffff;
-  }
-
-  .nav-button:hover::before {
-    opacity: 1;
+    background: var(--surface);
+    color: var(--accent);
+    box-shadow: var(--shadow-sm);
   }
 
   .nav-button:active {
-    transform: translateY(0) scale(0.98);
+    transform: scale(0.92);
   }
 
-  .days-grid {
-    flex-grow: 1;
+  /* ---------- Weekday row ---------- */
+  .weekday-row {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    grid-template-rows: auto;
-    grid-auto-rows: 1fr;
-    gap: 16px;
+    gap: 10px;
+    margin-bottom: 10px;
   }
 
-  .day-name {
-    font-weight: 700;
-    font-size: 0.9rem;
-    color: #ffffff;
+  .weekday {
     text-align: center;
-    padding: 1rem 0;
-    background: #000000;
-    border: 1px solid #ffffff;
-    border-radius: 0;
-    margin-bottom: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    box-shadow: none;
-    font-family: 'Courier New', monospace;
+    font-size: 0.88rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    padding: 6px 0;
+  }
+
+  .weekday.sun {
+    color: var(--sun);
+  }
+  .weekday.sat {
+    color: var(--sat);
+  }
+
+  /* ---------- Days grid ---------- */
+  .days-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 10px;
+    transition: opacity 0.2s var(--ease);
+  }
+
+  .days-grid.loading {
+    opacity: 0.4;
+    pointer-events: none;
   }
 
   .day {
-    background: #000000;
-    border-radius: 0;
-    padding: 1rem;
+    position: relative;
     display: flex;
     flex-direction: column;
-    border: 1px solid #ffffff;
-    transition: all 0.3s ease;
-    min-height: 140px;
-    position: relative;
-    overflow: hidden;
-    box-shadow: none;
-    font-family: 'Courier New', monospace;
+    min-height: 144px;
+    padding: 13px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease),
+      border-color 0.18s var(--ease);
+  }
+
+  .day.has-menu:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--border-strong);
   }
 
   .day.other-month {
-    opacity: 0.3;
+    background: transparent;
+    border-color: transparent;
   }
 
-  .day:hover {
-    transform: none;
-    box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
-    border-color: #ffffff;
+  .day.other-month .day-number {
+    color: var(--text-faint);
+    opacity: 0.55;
+  }
+
+  .day-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
   }
 
   .day-number {
+    display: inline-grid;
+    place-items: center;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 7px;
+    font-size: 1rem;
     font-weight: 700;
-    color: #ffffff;
-    margin-bottom: 0.75rem;
-    font-size: 1.1rem;
-    text-align: center;
-    position: relative;
-    z-index: 2;
-    font-family: 'Courier New', monospace;
+    color: var(--text);
+    border-radius: 999px;
   }
 
+  .day-number.sun {
+    color: var(--sun);
+  }
+  .day-number.sat {
+    color: var(--sat);
+  }
+
+  /* Today */
   .day.today {
-    background: rgba(255, 255, 255, 0.2);
-    color: #ffffff;
-    box-shadow: 
-      0 0 20px rgba(255, 255, 255, 0.8),
-      inset 0 0 10px rgba(255, 255, 255, 0.3);
-    border-color: #ffffff;
-    border-width: 3px;
-  }
-
-  .day.today::before {
-    opacity: 0;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), var(--shadow-md);
+    background: linear-gradient(180deg, var(--accent-soft), transparent 60%),
+      var(--surface);
   }
 
   .day.today .day-number {
-    color: #000000;
-    background: #ffffff;
-    border-radius: 0;
-    width: 2.5em;
-    height: 2.5em;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-weight: 800;
-    margin: 0 auto 0.75rem;
-    backdrop-filter: none;
-    box-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
-    font-family: 'Courier New', monospace;
-    border: 2px solid #ffffff;
+    color: var(--accent-contrast);
+    background: var(--accent);
+    box-shadow: 0 2px 8px rgba(242, 84, 45, 0.35);
   }
 
-  .day.today .menu-list {
-    color: #ffffff;
-  }
-
-  .day.today .menu-list li {
-    background: rgba(255, 255, 255, 0.3);
-    padding: 0.25rem 0.5rem;
-    border-radius: 0;
-    margin-bottom: 0.3rem;
-    backdrop-filter: none;
-    color: #ffffff;
-    font-weight: 600;
-    border: 1px solid #ffffff;
-  }
-
+  /* Menu list */
   .menu-list {
     list-style: none;
-    padding: 0;
     margin: 0;
-    font-size: 0.85rem;
-    line-height: 1.5;
-    color: #ffffff;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
     overflow-y: auto;
-    font-weight: 500;
-    font-family: 'Courier New', monospace;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  .menu-list::-webkit-scrollbar {
+    width: 5px;
+  }
+  .menu-list::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
   }
 
   .menu-list li {
-    margin-bottom: 0.3rem;
-    padding: 0.25rem 0.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 0;
-    transition: all 0.2s ease;
-    border-left: 2px solid transparent;
-    border: 1px solid rgba(255, 255, 255, 0.3);
+    position: relative;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    font-weight: 500;
+    color: var(--text-body);
+    letter-spacing: -0.01em;
+    padding: 3px 6px 3px 16px;
+    border-radius: 7px;
+    word-break: keep-all;
   }
 
-  .menu-list li:hover {
-    background: rgba(255, 255, 255, 0.2);
-    border-left-color: #ffffff;
-    box-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
+  .menu-list li::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 0.68em;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--accent);
   }
 
-  .date-picker-overlay {
+  .day.today .menu-list li {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* Loading hint */
+  .overlay-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 12px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: var(--shadow-md);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  /* ---------- Date picker ---------- */
+  .picker-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.8);
+    inset: 0;
+    background: rgba(15, 18, 24, 0.45);
+    backdrop-filter: blur(6px);
     display: flex;
-    justify-content: center;
     align-items: flex-start;
-    padding-top: 5vh;
+    justify-content: center;
+    padding: 12vh 20px 20px;
     z-index: 1000;
+    animation: fade 0.18s var(--ease);
   }
 
-  .date-picker {
-    background: #000000;
-    border: 2px solid #ffffff;
-    border-radius: 0;
-    padding: 2rem;
-    max-width: 500px;
-    width: 90%;
-    font-family: 'Courier New', monospace;
+  .picker {
+    width: 100%;
+    max-width: 380px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: 24px;
+    animation: pop 0.22s var(--ease);
   }
 
-  .date-picker-header {
+  .picker-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 1.5rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid #ffffff;
+    justify-content: space-between;
+    margin-bottom: 20px;
   }
 
-  .date-picker-header h3 {
-    color: #ffffff;
+  .picker-header h3 {
     margin: 0;
-    font-size: 1.5rem;
-    font-family: 'Courier New', monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text);
   }
 
   .close-button {
-    background: transparent;
-    border: 1px solid #ffffff;
-    color: #ffffff;
-    font-size: 1.5rem;
-    width: 2rem;
-    height: 2rem;
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: 50%;
+    background: var(--surface-muted);
+    color: var(--text-muted);
     cursor: pointer;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-family: 'Courier New', monospace;
+    transition: all 0.18s var(--ease);
   }
 
   .close-button:hover {
-    background: #ffffff;
-    color: #000000;
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   .year-selector {
     display: flex;
-    justify-content: center;
     align-items: center;
-    margin: 1.5rem 0;
-    gap: 1rem;
+    justify-content: center;
+    gap: 16px;
+    margin-bottom: 20px;
   }
 
-  .year-nav-button {
-    background: transparent;
-    border: 1px solid #ffffff;
-    color: #ffffff;
-    font-size: 1.5rem;
-    width: 2.5rem;
-    height: 2.5rem;
+  .year-nav {
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--text-muted);
     cursor: pointer;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-family: 'Courier New', monospace;
-    transition: all 0.2s ease;
+    transition: all 0.18s var(--ease);
   }
 
-  .year-nav-button:hover {
-    background: rgba(255, 255, 255, 0.2);
+  .year-nav:hover {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .current-year {
-    color: #ffffff;
-    margin: 0;
-    font-size: 1.5rem;
-    font-weight: bold;
-    min-width: 4rem;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text);
+    min-width: 4.5rem;
     text-align: center;
-    font-family: 'Courier New', monospace;
   }
 
   .month-grid {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 0.5rem;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
   }
 
   .month-button {
-    background: transparent;
-    border: 1px solid #ffffff;
-    color: #ffffff;
-    padding: 0.75rem;
+    padding: 12px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-muted);
+    font-size: 0.92rem;
+    font-weight: 600;
     cursor: pointer;
-    font-family: 'Courier New', monospace;
-    font-size: 0.9rem;
-    transition: all 0.2s ease;
+    transition: all 0.16s var(--ease);
   }
 
   .month-button:hover {
-    background: rgba(255, 255, 255, 0.2);
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .month-button.is-today {
+    color: var(--accent);
   }
 
   .month-button.active {
-    background: #ffffff;
-    color: #000000;
-    font-weight: bold;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-contrast);
+    box-shadow: 0 4px 12px rgba(242, 84, 45, 0.3);
   }
 
-  @media (max-width: 768px) {
-    :global(body) {
-      padding: 12px;
-    }
-    
-    .calendar-container {
-      padding: 20px;
-      border-radius: 20px;
-      transform: none;
-    }
-    
-    .month-title {
-      font-size: 2.2rem;
-    }
-    
-    .date-picker {
-      width: 95%;
-      padding: 1rem;
-    }
-    
-    .month-grid {
-      grid-template-columns: repeat(4, 1fr);
-    }
-    
-    .nav-button {
-      width: 48px;
-      height: 48px;
-      font-size: 1.6rem;
-    }
-    
+  @keyframes fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes pop {
+    from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 720px) {
+    .weekday-row,
     .days-grid {
-      gap: 12px;
+      gap: 6px;
     }
-    
+
     .day {
-      min-height: 120px;
-      padding: 0.75rem;
+      min-height: 96px;
+      padding: 8px;
+      border-radius: var(--radius-sm);
+    }
+
+    .day-number {
+      min-width: 24px;
+      height: 24px;
+      font-size: 0.82rem;
+    }
+
+    .menu-list li {
+      font-size: 0.84rem;
+      padding: 2px 4px 2px 14px;
+    }
+
+    .menu-list li::before {
+      left: 4px;
+    }
+
+    .cal-header {
+      align-items: center;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .day {
+      min-height: 82px;
+    }
+    .menu-list li {
+      font-size: 0.8rem;
     }
   }
 </style>

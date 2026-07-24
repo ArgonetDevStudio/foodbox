@@ -1,0 +1,44 @@
+{$DOMAIN} {
+	encode zstd gzip
+
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>headers>X-Admin-Token delete
+			}
+		}
+	}
+
+	request_body {
+		max_size 10MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	@admin path /api/crawl /api/crawl/* /api/upload /api/upload/* /api/slack/notify /api/slack/notify/*
+	respond @admin 404
+
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	@index path / /index.html
+	header @index Cache-Control "public, max-age=0, must-revalidate"
+
+	reverse_proxy app:8080 {
+		health_uri /healthz
+		health_interval 15s
+		health_timeout 2s
+		health_status 200
+		fail_duration 30s
+		max_fails 3
+	}
+}

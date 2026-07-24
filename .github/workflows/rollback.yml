@@ -1,0 +1,155 @@
+name: Roll back production
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: foodbox-production
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Restore previous digest
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL || 'https://foodbox.o-r.kr' }}
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/ubuntu/foodbox' }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://foodbox.o-r.kr' }}
+    steps:
+      - name: Configure strict SSH authentication
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${DEPLOY_HOST:?DEPLOY_HOST is required}"
+          : "${DEPLOY_USER:?DEPLOY_USER is required}"
+          : "${DEPLOY_KEY:?DEPLOY_SSH_KEY is required}"
+          : "${DEPLOY_KNOWN_HOSTS:?DEPLOY_KNOWN_HOSTS is required}"
+          DEPLOY_PORT=${DEPLOY_PORT:-22}
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.:-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+          if [[ ! $DEPLOY_PATH =~ ^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$ ]] || \
+            [[ $(realpath -m -- "$DEPLOY_PATH") != "$DEPLOY_PATH" ]]; then
+            echo "DEPLOY_PATH must be a canonical absolute path with at least two components." >&2
+            exit 2
+          fi
+          [[ "$PUBLIC_URL" =~ ^https://[A-Za-z0-9.-]+/?$ ]]
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/foodbox_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/foodbox_deploy" "$HOME/.ssh/known_hosts"
+          printf 'DEPLOY_PORT=%s\n' "$DEPLOY_PORT" >> "$GITHUB_ENV"
+          printf 'ROLLBACK_JOB_ID=rollback-%s\n' "$GITHUB_RUN_ID" >> "$GITHUB_ENV"
+
+      - name: Roll back and verify production
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_options=(
+            -i "$HOME/.ssh/foodbox_deploy" \
+            -p "$DEPLOY_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+          )
+          # shellcheck disable=SC2029 # Values expand locally after strict validation.
+          ssh "${ssh_options[@]}" "$target" \
+            "FOODBOX_ROOT='$DEPLOY_PATH' bash '$DEPLOY_PATH/scripts/job.sh' start '$ROLLBACK_JOB_ID' rollback '$PUBLIC_URL' '$DEPLOY_PATH/scripts/rollback.sh'"
+
+          deadline=$((SECONDS + 1800))
+          rollback_status=
+          while (( SECONDS < deadline )); do
+            set +e
+            # shellcheck disable=SC2029 # Values expand locally after strict validation.
+            remote_status=$(ssh "${ssh_options[@]}" "$target" \
+              "FOODBOX_ROOT='$DEPLOY_PATH' bash '$DEPLOY_PATH/.deploy-state/jobs/$ROLLBACK_JOB_ID/job.sh' status '$ROLLBACK_JOB_ID'" 2>/dev/null)
+            poll_status=$?
+            set -e
+            if [[ $poll_status != 0 ]]; then
+              echo "Remote status is temporarily unavailable; retrying."
+              sleep 10
+              continue
+            fi
+            if [[ $remote_status == RUNNING ]]; then
+              echo "Remote rollback job $ROLLBACK_JOB_ID is still running."
+              sleep 10
+              continue
+            fi
+            if [[ $remote_status =~ ^EXIT:([0-9]+)$ ]]; then
+              rollback_status=${BASH_REMATCH[1]}
+              break
+            fi
+            echo "Unexpected remote status: $remote_status" >&2
+            sleep 10
+          done
+
+          set +e
+          # shellcheck disable=SC2029 # Values expand locally after strict validation.
+          ssh "${ssh_options[@]}" "$target" \
+            "FOODBOX_ROOT='$DEPLOY_PATH' bash '$DEPLOY_PATH/.deploy-state/jobs/$ROLLBACK_JOB_ID/job.sh' log '$ROLLBACK_JOB_ID'"
+          set -e
+          if [[ -z $rollback_status ]]; then
+            echo "::error title=Production rollback still running::Remote job $ROLLBACK_JOB_ID did not finish within the polling window. Re-run this workflow to reattach."
+            exit 1
+          fi
+          if [[ $rollback_status == 11 ]]; then
+            echo "::error title=Production recovery failed::Rollback and restoration of the starting release both failed. Manual intervention is required."
+            exit "$rollback_status"
+          fi
+          if [[ $rollback_status == 10 ]]; then
+            echo "::error title=Rollback rejected::The requested rollback failed; the starting release was restored and verified."
+            exit "$rollback_status"
+          fi
+          if [[ $rollback_status == 20 ]]; then
+            echo "::error title=Rollback preflight failed::The active release was not changed. Inspect remote job $ROLLBACK_JOB_ID before retrying."
+            exit "$rollback_status"
+          fi
+          if [[ $rollback_status == 21 ]]; then
+            echo "::error title=Rollback job state lost::The durable job did not record a definitive result. Inspect production before starting another rollback."
+            exit "$rollback_status"
+          fi
+          if [[ $rollback_status != 0 ]]; then
+            echo "::error title=Production rollback status unknown::Rollback exited with status $rollback_status. Check the server before retrying."
+            exit "$rollback_status"
+          fi
+
+      - name: Verify production from the Actions runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          body="$RUNNER_TEMP/foodbox-rollback-probe"
+          status=$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+            --connect-timeout 5 --max-time 15 "${PUBLIC_URL%/}/api/menu")
+          [[ "$status" == 200 ]]
+          python3 - "$body" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as response:
+              value = json.load(response)
+          if not isinstance(value, dict) or set(value) != {"status", "error", "data"}:
+              raise SystemExit(1)
+          if value["status"] != 200 or value["error"] is not None or not isinstance(value["data"], list):
+              raise SystemExit(1)
+          PY
+
+          status=$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+            --connect-timeout 5 --max-time 15 "${PUBLIC_URL%/}/")
+          [[ "$status" == 200 ]]
+          grep -Fq '<div id="app">' "$body"

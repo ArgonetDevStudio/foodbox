@@ -1,79 +1,139 @@
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Shape & motion (theme-independent) */
+  --radius-lg: 24px;
+  --radius-md: 16px;
+  --radius-sm: 12px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,
+    'Apple SD Gothic Neo', system-ui, 'Malgun Gothic', 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+/* ---------- Light theme (default) ---------- */
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --accent: #f2542d;
+  --accent-strong: #d83c17;
+  --accent-soft: rgba(242, 84, 45, 0.1);
+  --accent-contrast: #ffffff;
+
+  --bg: #eef0f4;
+  --bg-gradient: radial-gradient(1200px 800px at 15% -10%, #fff0ea 0%, transparent 55%),
+    radial-gradient(1000px 700px at 100% 0%, #eaeeff 0%, transparent 50%), #eef0f4;
+  --surface: #ffffff;
+  --surface-muted: #f4f6f9;
+  --surface-hover: #fbfcfe;
+
+  --border: #e3e6ec;
+  --border-strong: #cdd2dc;
+
+  --text: #14171d; /* headings / day numbers */
+  --text-body: #363b45; /* menu items — high contrast */
+  --text-muted: #545a66;
+  --text-faint: #8b93a1;
+
+  --sun: #e02424;
+  --sat: #2563eb;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.06), 0 2px 6px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 24px 48px -12px rgba(16, 24, 40, 0.18);
 }
 
+/* ---------- Dark theme tokens ---------- */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --accent: #ff8763;
+  --accent-strong: #ff6b4a;
+  --accent-soft: rgba(255, 135, 99, 0.18);
+  --accent-contrast: #1a1200;
+
+  --bg: #0e1015;
+  --bg-gradient: radial-gradient(1200px 800px at 15% -10%, rgba(255, 107, 74, 0.12) 0%, transparent 55%),
+    radial-gradient(1000px 700px at 100% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 50%), #0e1015;
+  --surface: #191d25;
+  --surface-muted: #1f242e;
+  --surface-hover: #232935;
+
+  --border: #2b313d;
+  --border-strong: #3a4150;
+
+  --text: #f4f6fa;
+  --text-body: #d3d8e2; /* menu items — high contrast */
+  --text-muted: #a6adba;
+  --text-faint: #757d8c;
+
+  --sun: #ff8080;
+  --sat: #6ea8ff;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.65);
+}
+
+/* Follow the OS when the user hasn't explicitly chosen light */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --accent: #ff8763;
+    --accent-strong: #ff6b4a;
+    --accent-soft: rgba(255, 135, 99, 0.18);
+    --accent-contrast: #1a1200;
+
+    --bg: #0e1015;
+    --bg-gradient: radial-gradient(1200px 800px at 15% -10%, rgba(255, 107, 74, 0.12) 0%, transparent 55%),
+      radial-gradient(1000px 700px at 100% 0%, rgba(99, 102, 241, 0.12) 0%, transparent 50%), #0e1015;
+    --surface: #191d25;
+    --surface-muted: #1f242e;
+    --surface-hover: #232935;
+
+    --border: #2b313d;
+    --border-strong: #3a4150;
+
+    --text: #f4f6fa;
+    --text-body: #d3d8e2;
+    --text-muted: #a6adba;
+    --text-faint: #757d8c;
+
+    --sun: #ff8080;
+    --sat: #6ea8ff;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.65);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
   min-height: 100vh;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-.card {
-  padding: 2em;
-}
-
-#app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+body {
+  background: var(--bg-gradient);
+  background-attachment: fixed;
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
 }
 
 button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
   font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+#app {
+  width: 100%;
 }

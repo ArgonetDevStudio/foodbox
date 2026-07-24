@@ -1,36 +1,63 @@
-services:
-  foodbox-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      - TZ=Asia/Seoul
-      - SLACK_TOKEN=${SLACK_TOKEN}
-      - SLACK_CHANNEL=${SLACK_CHANNEL}
-      - DB_FILE_DIR=/db
-      - CRAWL_URL=${CRAWL_URL}
-      - CLOVA_URL=${CLOVA_URL}
-      - CLOVA_SECRET_KEY=${CLOVA_SECRET_KEY}
-    volumes:
-      - ./db:/db
-    networks:
-      - foodbox-network
+name: foodbox
 
-  foodbox-frontend:
-    build:
-      context: ./front
-      dockerfile: Dockerfile
+services:
+  app:
+    image: ${FOODBOX_IMAGE:?FOODBOX_IMAGE must be an immutable GHCR digest}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./.env
+    environment:
+      DB_FILE_DIR: /data
+      SERVER_PORT: "8080"
+      STATIC_DIR: /app/static
+      TZ: Asia/Seoul
+    expose:
+      - "8080"
+    volumes:
+      - ./db:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 4
+    mem_limit: 256m
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN must be set by the deployment script}
     ports:
       - "80:80"
       - "443:443"
-    depends_on:
-      - foodbox-backend
+      - "443:443/udp"
     volumes:
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-      - /var/www/certbot:/var/www/certbot
-    networks:
-      - foodbox-network
+      - ./deploy:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 128m
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
-networks:
-  foodbox-network:
-    driver: bridge
+volumes:
+  caddy_data:
+  caddy_config:
