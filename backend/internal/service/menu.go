@@ -9,11 +9,18 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/LooLookProject/foodbox/backend/internal/domain"
 )
 
-const defaultMaxImageBytes int64 = 10 << 20
+const (
+	defaultMaxImageBytes int64 = 10 << 20
+	todayFailureCooldown       = 30 * time.Second
+	// Download can make three 15-second HTTP requests before the 15-second OCR
+	// request. Keep a small margin for parsing and persistence.
+	todayRefreshTimeout = 75 * time.Second
+)
 
 var (
 	ErrNotConfigured         = errors.New("service dependency not configured")
@@ -89,6 +96,14 @@ func WithMaxImageBytes(max int64) MenuServiceOption {
 	}
 }
 
+func WithTimeClock(now func() time.Time) MenuServiceOption {
+	return func(service *MenuService) {
+		if now != nil {
+			service.timeNow = now
+		}
+	}
+}
+
 // WithRemoveFile is intended for tests that need to observe temporary-file
 // cleanup. Production callers should use the default os.Remove implementation.
 func WithRemoveFile(remove func(string) error) MenuServiceOption {
@@ -106,11 +121,29 @@ type MenuService struct {
 	parser     Parser
 	hashes     HashStore
 
-	now           func() domain.LocalDate
-	maxImageBytes int64
-	removeFile    func(string) error
-	crawlGate     chan struct{}
-	startupOnce   sync.Once
+	now            func() domain.LocalDate
+	timeNow        func() time.Time
+	maxImageBytes  int64
+	refreshTimeout time.Duration
+	removeFile     func(string) error
+	crawlGate      chan struct{}
+	startupOnce    sync.Once
+
+	todayMu       sync.Mutex
+	todayCrawls   map[string]*todayCrawlCall
+	todayFailures map[string]todayCrawlFailure
+}
+
+type todayCrawlCall struct {
+	done    chan struct{}
+	waiters int
+	menu    domain.Menu
+	err     error
+}
+
+type todayCrawlFailure struct {
+	err        error
+	retryAfter time.Time
 }
 
 func NewMenuService(
@@ -122,15 +155,19 @@ func NewMenuService(
 	options ...MenuServiceOption,
 ) *MenuService {
 	service := &MenuService{
-		repository:    repository,
-		crawler:       crawler,
-		ocr:           ocr,
-		parser:        parser,
-		hashes:        hashes,
-		now:           todayInSeoul,
-		maxImageBytes: defaultMaxImageBytes,
-		removeFile:    os.Remove,
-		crawlGate:     make(chan struct{}, 1),
+		repository:     repository,
+		crawler:        crawler,
+		ocr:            ocr,
+		parser:         parser,
+		hashes:         hashes,
+		now:            todayInSeoul,
+		timeNow:        time.Now,
+		maxImageBytes:  defaultMaxImageBytes,
+		refreshTimeout: todayRefreshTimeout,
+		removeFile:     os.Remove,
+		crawlGate:      make(chan struct{}, 1),
+		todayCrawls:    make(map[string]*todayCrawlCall),
+		todayFailures:  make(map[string]todayCrawlFailure),
 	}
 	for _, option := range options {
 		option(service)
@@ -183,6 +220,89 @@ func (s *MenuService) Today(ctx context.Context, date domain.LocalDate) (domain.
 	menu, found, err := s.repository.FindByDate(ctx, date)
 	if err != nil {
 		return domain.Menu{}, fmt.Errorf("find menu for %s: %w", formatDate(date), err)
+	}
+	if found {
+		return menu, nil
+	}
+	return s.fetchMissingToday(ctx, date)
+}
+
+// fetchMissingToday coalesces automatic missing-menu refreshes for one date.
+// The bounded refresh outlives individual requests, preventing disconnects
+// from triggering replacement work. Its failure cooldown is deliberately
+// process-local, so a restart retries immediately. Explicit Crawl bypasses it.
+func (s *MenuService) fetchMissingToday(ctx context.Context, date domain.LocalDate) (domain.Menu, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Menu{}, err
+	}
+	key := formatDate(date)
+	s.todayMu.Lock()
+	now := s.timeNow()
+	for failedDate, failure := range s.todayFailures {
+		if !now.Before(failure.retryAfter) {
+			delete(s.todayFailures, failedDate)
+		}
+	}
+	if failure, found := s.todayFailures[key]; found {
+		s.todayMu.Unlock()
+		return domain.Menu{}, failure.err
+	}
+	if call, found := s.todayCrawls[key]; found {
+		call.waiters++
+		s.todayMu.Unlock()
+		return s.waitForTodayCrawl(ctx, key, call)
+	}
+	crawlContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.refreshTimeout)
+	call := &todayCrawlCall{done: make(chan struct{}), waiters: 1}
+	s.todayCrawls[key] = call
+	s.todayMu.Unlock()
+	go s.runTodayCrawl(crawlContext, cancel, key, date, call)
+	return s.waitForTodayCrawl(ctx, key, call)
+}
+
+func (s *MenuService) waitForTodayCrawl(ctx context.Context, key string, call *todayCrawlCall) (domain.Menu, error) {
+	select {
+	case <-call.done:
+		return call.menu, call.err
+	case <-ctx.Done():
+		s.todayMu.Lock()
+		call.waiters--
+		s.todayMu.Unlock()
+		return domain.Menu{}, ctx.Err()
+	}
+}
+
+func (s *MenuService) runTodayCrawl(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	key string,
+	date domain.LocalDate,
+	call *todayCrawlCall,
+) {
+	defer cancel()
+	menu, err := s.crawlAndFind(ctx, date)
+
+	s.todayMu.Lock()
+	call.menu, call.err = menu, err
+	if current, found := s.todayCrawls[key]; found && current == call {
+		delete(s.todayCrawls, key)
+		if err == nil {
+			delete(s.todayFailures, key)
+		} else {
+			s.todayFailures[key] = todayCrawlFailure{
+				err:        err,
+				retryAfter: s.timeNow().Add(todayFailureCooldown),
+			}
+		}
+	}
+	close(call.done)
+	s.todayMu.Unlock()
+}
+
+func (s *MenuService) crawlAndFind(ctx context.Context, date domain.LocalDate) (domain.Menu, error) {
+	menu, found, err := s.repository.FindByDate(ctx, date)
+	if err != nil {
+		return domain.Menu{}, fmt.Errorf("recheck menu for %s: %w", formatDate(date), err)
 	}
 	if found {
 		return menu, nil

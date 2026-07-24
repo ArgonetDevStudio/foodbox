@@ -339,6 +339,340 @@ func TestTodayMissingDateRetriesMatchingImageAndReturnsRecoveredMenu(t *testing.
 	}
 }
 
+func TestConcurrentMissingTodayRequestsShareOneRefreshResult(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	want := domain.NewMenu(today, []string{"one", "two", "three"})
+	repository := newMemoryRepository()
+	hashes := &memoryHashStore{}
+	path := writeImage(t, []byte("image"))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var crawlCalls atomic.Int32
+	var ocrCalls atomic.Int32
+	service := NewMenuService(
+		repository,
+		crawlerFunc(func(context.Context) (string, error) {
+			crawlCalls.Add(1)
+			close(started)
+			<-release
+			return path, nil
+		}),
+		ocrFunc(func(context.Context, []byte) ([]byte, error) {
+			ocrCalls.Add(1)
+			return []byte("ocr"), nil
+		}),
+		successfulParser(want),
+		hashes,
+		WithDateClock(func() domain.LocalDate { return today }),
+	)
+
+	type result struct {
+		menu domain.Menu
+		err  error
+	}
+	results := make(chan result, 2)
+	go func() {
+		menu, err := service.Today(context.Background(), today)
+		results <- result{menu: menu, err: err}
+	}()
+	<-started
+	go func() {
+		menu, err := service.Today(context.Background(), today)
+		results <- result{menu: menu, err: err}
+	}()
+
+	waitForTodayWaiters(t, service, formatDate(today), 2)
+	close(release)
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.menu.Date != want.Date || len(result.menu.Menus) != len(want.Menus) {
+			t.Fatalf("menu = %+v, want %+v", result.menu, want)
+		}
+	}
+	if crawlCalls.Load() != 1 || ocrCalls.Load() != 1 || repository.saveCalls != 1 {
+		t.Fatalf("crawl=%d OCR=%d saves=%d, want 1 each", crawlCalls.Load(), ocrCalls.Load(), repository.saveCalls)
+	}
+}
+
+func TestMissingTodayRefreshOutlivesCanceledLeaderWhenFollowerRemains(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	want := domain.NewMenu(today, []string{"one", "two", "three"})
+	path := writeImage(t, []byte("image"))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service := NewMenuService(
+		newMemoryRepository(),
+		crawlerFunc(func(ctx context.Context) (string, error) {
+			close(started)
+			select {
+			case <-release:
+				return path, nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}),
+		ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
+		successfulParser(want),
+		&memoryHashStore{},
+		WithDateClock(func() domain.LocalDate { return today }),
+	)
+
+	leaderContext, cancelLeader := context.WithCancel(context.Background())
+	leaderResult := make(chan error, 1)
+	go func() {
+		_, err := service.Today(leaderContext, today)
+		leaderResult <- err
+	}()
+	<-started
+	followerResult := make(chan resultMenu, 1)
+	go func() {
+		menu, err := service.Today(context.Background(), today)
+		followerResult <- resultMenu{menu: menu, err: err}
+	}()
+	waitForTodayWaiters(t, service, formatDate(today), 2)
+
+	cancelLeader()
+	if err := <-leaderResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader error = %v, want context canceled", err)
+	}
+	close(release)
+	follower := <-followerResult
+	if follower.err != nil {
+		t.Fatal(follower.err)
+	}
+	if follower.menu.Date != want.Date || len(follower.menu.Menus) != len(want.Menus) {
+		t.Fatalf("follower menu = %+v, want %+v", follower.menu, want)
+	}
+}
+
+func TestMissingTodayRefreshSurvivesZeroWaitersForLateRequest(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	want := domain.NewMenu(today, []string{"one", "two", "three"})
+	path := writeImage(t, []byte("image"))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var crawlCalls atomic.Int32
+	service := NewMenuService(
+		newMemoryRepository(),
+		crawlerFunc(func(ctx context.Context) (string, error) {
+			crawlCalls.Add(1)
+			close(started)
+			select {
+			case <-release:
+				return path, nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}),
+		ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
+		successfulParser(want),
+		&memoryHashStore{},
+		WithDateClock(func() domain.LocalDate { return today }),
+	)
+
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Today(requestContext, today)
+		result <- err
+	}()
+	<-started
+	cancelRequest()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("request error = %v, want context canceled", err)
+	}
+
+	lateResult := make(chan resultMenu, 1)
+	go func() {
+		menu, err := service.Today(context.Background(), today)
+		lateResult <- resultMenu{menu: menu, err: err}
+	}()
+	waitForTodayWaiters(t, service, formatDate(today), 1)
+	close(release)
+	late := <-lateResult
+	if late.err != nil {
+		t.Fatal(late.err)
+	}
+	if late.menu.Date != want.Date || len(late.menu.Menus) != len(want.Menus) {
+		t.Fatalf("late menu = %+v, want %+v", late.menu, want)
+	}
+	if crawlCalls.Load() != 1 {
+		t.Fatalf("crawl calls = %d, want 1", crawlCalls.Load())
+	}
+}
+
+func TestMissingTodaySharedRefreshTimeoutEntersCooldown(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	clock := time.Date(2026, time.July, 27, 9, 0, 0, 0, time.UTC)
+	var crawlCalls atomic.Int32
+	service := NewMenuService(
+		newMemoryRepository(),
+		crawlerFunc(func(ctx context.Context) (string, error) {
+			crawlCalls.Add(1)
+			<-ctx.Done()
+			return "", ctx.Err()
+		}),
+		ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
+		successfulParser(domain.NewMenu(today, []string{"one", "two", "three"})),
+		&memoryHashStore{},
+		WithDateClock(func() domain.LocalDate { return today }),
+		WithTimeClock(func() time.Time { return clock }),
+	)
+	service.refreshTimeout = time.Millisecond
+
+	for range 2 {
+		if _, err := service.Today(context.Background(), today); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Today error = %v, want deadline exceeded", err)
+		}
+	}
+	if crawlCalls.Load() != 1 {
+		t.Fatalf("crawl calls = %d, want 1", crawlCalls.Load())
+	}
+}
+
+func TestMissingTodayRechecksRepositoryBeforeExternalRefresh(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	want := domain.NewMenu(today, []string{"one", "two", "three"})
+	var crawlCalls atomic.Int32
+	service := NewMenuService(
+		newMemoryRepository(want),
+		crawlerFunc(func(context.Context) (string, error) {
+			crawlCalls.Add(1)
+			return "", errors.New("unexpected crawl")
+		}),
+		ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
+		successfulParser(want),
+		&memoryHashStore{},
+		WithDateClock(func() domain.LocalDate { return today }),
+	)
+
+	got, err := service.fetchMissingToday(context.Background(), today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Date != want.Date || len(got.Menus) != len(want.Menus) {
+		t.Fatalf("menu = %+v, want %+v", got, want)
+	}
+	if crawlCalls.Load() != 0 {
+		t.Fatalf("crawl calls = %d, want 0", crawlCalls.Load())
+	}
+}
+
+type resultMenu struct {
+	menu domain.Menu
+	err  error
+}
+
+func waitForTodayWaiters(t *testing.T, service *MenuService, key string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		service.todayMu.Lock()
+		call := service.todayCrawls[key]
+		got := 0
+		if call != nil {
+			got = call.waiters
+		}
+		service.todayMu.Unlock()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("today crawl waiters = %d, want %d", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestMissingTodayFailureCooldownPreventsHammeringAndThenRetries(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	clock := time.Date(2026, time.July, 27, 9, 0, 0, 0, time.UTC)
+	downloadError := errors.New("vendor unavailable")
+	var crawlCalls atomic.Int32
+	crawler := crawlerFunc(func(context.Context) (string, error) {
+		crawlCalls.Add(1)
+		return "", downloadError
+	})
+	newService := func() *MenuService {
+		return NewMenuService(
+			newMemoryRepository(),
+			crawler,
+			ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
+			successfulParser(domain.NewMenu(today, []string{"one", "two", "three"})),
+			&memoryHashStore{},
+			WithDateClock(func() domain.LocalDate { return today }),
+			WithTimeClock(func() time.Time { return clock }),
+		)
+	}
+	service := newService()
+
+	for range 2 {
+		if _, err := service.Today(context.Background(), today); !errors.Is(err, downloadError) {
+			t.Fatalf("Today error = %v, want %v", err, downloadError)
+		}
+	}
+	if crawlCalls.Load() != 1 {
+		t.Fatalf("crawl calls during cooldown = %d, want 1", crawlCalls.Load())
+	}
+
+	if err := service.Crawl(context.Background()); !errors.Is(err, downloadError) {
+		t.Fatalf("explicit Crawl error = %v, want %v", err, downloadError)
+	}
+	if crawlCalls.Load() != 2 {
+		t.Fatalf("crawl calls after explicit crawl = %d, want 2", crawlCalls.Load())
+	}
+
+	clock = clock.Add(todayFailureCooldown)
+	if _, err := service.Today(context.Background(), today); !errors.Is(err, downloadError) {
+		t.Fatalf("Today retry error = %v, want %v", err, downloadError)
+	}
+	if crawlCalls.Load() != 3 {
+		t.Fatalf("crawl calls after cooldown = %d, want 3", crawlCalls.Load())
+	}
+
+	// The cooldown is intentionally in memory: a replacement process retries
+	// immediately instead of inheriting stale suppression state.
+	restarted := newService()
+	if _, err := restarted.Today(context.Background(), today); !errors.Is(err, downloadError) {
+		t.Fatalf("restarted Today error = %v, want %v", err, downloadError)
+	}
+	if crawlCalls.Load() != 4 {
+		t.Fatalf("crawl calls after restart = %d, want 4", crawlCalls.Load())
+	}
+}
+
+func TestMissingTodayNotUploadedResultUsesFailureCooldown(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	future := domain.NewMenu(domain.LocalDate{Year: 2026, Month: 7, Day: 28}, []string{"future", "menu", "only"})
+	clock := time.Date(2026, time.July, 27, 9, 0, 0, 0, time.UTC)
+	path := writeImage(t, []byte("image"))
+	var crawlCalls atomic.Int32
+	service := NewMenuService(
+		newMemoryRepository(),
+		crawlerFunc(func(context.Context) (string, error) {
+			crawlCalls.Add(1)
+			return path, nil
+		}),
+		ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
+		successfulParser(future),
+		&memoryHashStore{},
+		WithDateClock(func() domain.LocalDate { return today }),
+		WithTimeClock(func() time.Time { return clock }),
+	)
+
+	for range 2 {
+		if _, err := service.Today(context.Background(), today); !errors.Is(err, ErrMenuNotUploaded) {
+			t.Fatalf("Today error = %v, want %v", err, ErrMenuNotUploaded)
+		}
+	}
+	if crawlCalls.Load() != 1 {
+		t.Fatalf("crawl calls = %d, want 1", crawlCalls.Load())
+	}
+}
+
 func TestMatchingImageHashSkipsWhenRepositoryHasCurrentCoverage(t *testing.T) {
 	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
 	tests := []struct {
