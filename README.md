@@ -4,22 +4,12 @@ Foodbox downloads the Eisodosirak lunch menu image, parses it with Naver Clova
 OCR, keeps the result in a file database, renders a Svelte calendar, and sends
 daily Slack notifications.
 
-The new production design runs as two small containers:
+Production runs as two small containers:
 
 - one non-root Go application containing the API, scheduler, OCR pipeline, file
   store, and compiled Svelte assets;
 - Caddy as the only host-facing service, providing automatic HTTPS and reverse
   proxying to the application.
-
-The previous Spring Boot implementation remains in `src/` as legacy reference
-code during the first-cutover rollback window. It is not built by the current
-production Dockerfile or GitHub Actions workflows. A real Spring rollback uses
-the preserved server-side legacy Compose/JAR/images or Git history, not the new
-root Dockerfile. Until the cutover is accepted, the Oracle VM may still be
-serving the legacy stack.
-
-For the production cutover, credential rotation, backup, and rollback runbook,
-see [docs/MIGRATION.md](docs/MIGRATION.md).
 
 ## Requirements
 
@@ -94,9 +84,9 @@ npm ci
 npm run build
 ```
 
-The Go tests deliberately pin behavior that existing users can observe. They
-cover the legacy file-database representation and upsert order, exact public API
-JSON, Slack payload and Korean message text, 09:00 Asia/Seoul scheduling,
+The Go tests deliberately pin behavior that users can observe. They cover the
+file-database representation and upsert order, exact public API JSON, Slack
+payload and Korean message text, 09:00 Asia/Seoul scheduling,
 startup/schedule overlap, OCR date edge cases, and complete golden-menu output
 for the retained OCR fixtures. Run both the ordinary and race suites before
 changing persistence, crawling, OCR, API, scheduling, or Slack behavior.
@@ -108,8 +98,8 @@ image is published.
 
 ## Configuration
 
-Do not put credentials in source files, Gradle resources, Docker images,
-commands, issue comments, or GitHub repository variables. The table names the
+Do not put credentials in source files, Docker images, commands, issue comments,
+or GitHub repository variables. The table names the
 variables only; secret values are intentionally omitted.
 
 | Variable | Required | Purpose |
@@ -157,16 +147,14 @@ the application, so possessing the token does not expose them on the public
 internet. Add a separately authenticated operator path before changing that
 edge policy.
 
-Responses retain the `{status,error,data}` envelope and menu fields used by the
-existing frontend. Unlike the legacy Spring advice, error responses now also
-use the corresponding HTTP status. The state-changing crawl and Slack routes
-now require `POST`.
+Responses use the `{status,error,data}` envelope and the menu fields consumed by
+the frontend. Error responses use the corresponding HTTP status. The
+state-changing crawl and Slack routes require `POST`.
 
 ## Persistence and scheduling
 
-- `db.json` keeps the existing Spring/Jackson `[year,month,day]`, `menus`, and
-  `valid` representation and remains backward-compatible with the legacy
-  application. Disk records are oldest first; `/api/menu` is newest first.
+- `db.json` stores dates as `[year,month,day]` alongside `menus` and `valid`.
+  Disk records are oldest first; `/api/menu` is newest first.
 - `metadata.json` persists the last successfully processed image hash, avoiding
   duplicate OCR work across restarts. A matching hash is skipped only while the
   database still contains today's menu, so missing state can repair itself.
@@ -188,7 +176,7 @@ now require `POST`.
 - `.github/workflows/rollback.yml` is a manually dispatched rollback to the
   previously successful Go release.
 
-The Oracle VM never runs Go, Node, Gradle, or Docker image builds during normal
+The Oracle VM never runs Go, Node, or Docker image builds during normal
 deployment. It pulls an immutable digest, backs up the file database, starts the
 stack, and accepts the release only after Compose health checks and the public
 HTTPS health check succeed.
@@ -205,35 +193,7 @@ step waits for approval. The server locks concurrent releases, backs up
 `db.json`, pulls the digest, waits for Compose and public HTTPS health checks,
 and restores the starting release if validation fails.
 
-After two successful Go deployments, the `Roll back production` workflow can be
+After two successful deployments, the `Roll back production` workflow can be
 manually dispatched from `main` to restore and verify the previously successful
-digest. The first cutover from Spring has no previous Go digest; use the manual
-Spring recovery procedure in [docs/MIGRATION.md](docs/MIGRATION.md). Never run
-`docker compose down -v` because the Caddy volumes contain certificate state.
-
-## Legacy Spring implementation
-
-The Java/Gradle files and Spring tests are intentionally retained during the
-migration window to document historical behavior. The first-cutover rollback
-also requires the preserved server-side legacy Compose/JAR/images or Git
-history. The legacy implementation has known operational and security
-limitations, including server-side builds, a larger JVM runtime,
-unauthenticated management GET routes, secret-bearing ignored development
-resources in old JARs, and secret disclosure in old startup logs.
-
-The Java-era OCR image and response fixtures have byte-identical copies under
-`backend/internal/ocr/testdata/`, and the Go tests no longer read
-`src/test/resources/`. The Go verification suite is therefore independent of
-the legacy source tree, but production acceptance is still required before
-deleting that tree.
-
-Do not use the legacy build as the source of production credentials. After the
-Go cutover and rollback window are complete, remove old JARs, images, logs, and
-ignored development configuration as described in the migration runbook.
-
-Remove the legacy source and tests only after the full Go unit, race, parity,
-OCR golden, frontend, and container checks pass; production has preserved the
-database, JSON API, HTTPS, UI, and a real scheduled 09:00 Slack notification for
-the agreed observation window; rotated credentials are the only active ones;
-and the user explicitly closes the first-cutover rollback window. Perform that
-deletion as a separate cleanup with another complete verification pass.
+digest. Never run `docker compose down -v` because the Caddy volumes contain
+certificate state.

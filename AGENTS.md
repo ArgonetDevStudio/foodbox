@@ -1,7 +1,19 @@
 # Foodbox agent guide
 
-Keep this file short. Use `README.md` for development and API details,
-`docs/MIGRATION.md` for cutover and rollback, and `deploy/README.md` for HTTPS.
+Keep this file short. Use `README.md` for development and API details and
+`deploy/README.md` for production HTTPS operations.
+
+## Root agent role
+
+- The root agent orchestrates agents, communicates with the user, manages scope
+  and decisions, and coordinates verification. It does not directly implement,
+  investigate, modify files or servers, run tests, or create commits.
+- Delegate implementation, research, file and server changes, test execution,
+  and commits to subagents with clearly separated ownership. Run independent
+  work in parallel when useful.
+- During long-running work, brief the user about every two minutes with the
+  active-agent count, approximate elapsed time, each assignment and current
+  action, and any blockers.
 
 ## How to work
 
@@ -21,17 +33,10 @@ Keep this file short. Use `README.md` for development and API details,
 - `deploy/Caddyfile`: public HTTP/HTTPS edge and automatic certificates
 - `docker-compose.yml`: one non-root Go app and one Caddy instance
 - `.github/workflows/`: CI, immutable GHCR digest deployment, manual rollback
-- `src/`, Gradle, and old Nginx files: temporary legacy reference only; the new
-  image and workflows do not build them
 
-The Oracle VM may still be running the Spring stack until cutover is accepted.
-Check the server before describing the Go migration as live. A first-cutover
-Spring rollback depends on preserved server Compose/JAR/images or Git history,
-not the current root Dockerfile.
+## Behavior contracts
 
-## Fragile compatibility contracts
-
-Existing API and Slack users must not notice the runtime migration.
+Treat externally visible API, persistence, OCR, and Slack behavior as stable.
 
 - `db/db.json` keeps `{date:[year,month,day], menus:[...], valid:boolean}`.
 - Database records are written oldest first; date upserts are last-write-wins;
@@ -41,7 +46,7 @@ Existing API and Slack users must not notice the runtime migration.
   are `[]`, never `null`.
 - New menus are valid only with at least three items.
 - Slack channel, username, `:bento:` icon, Korean weekday, bullets, whitespace,
-  and full message bytes must match the Java behavior.
+  and full message bytes are contract-tested.
 - Notifications run at 09:00 Asia/Seoul. Preserve weekend/invalid skips,
   non-last-Wednesday `데니스델리 🥗`, and last-Wednesday `외식 🍽`.
 - Startup refresh and notification never overlap. A tick during refresh is
@@ -53,13 +58,11 @@ Existing API and Slack users must not notice the runtime migration.
 - A matching image hash may skip OCR only when today's menu still exists. Save
   the hash only after OCR and database persistence succeed.
 
-Intentional HTTP changes are limited to management routes: crawl and Slack
-notify are POST, all management routes require `ADMIN_TOKEN`, and Caddy blocks
-them publicly. Go error HTTP status matches the envelope even where legacy
-Spring returned HTTP 200.
+Management routes use POST, require `ADMIN_TOKEN`, and are blocked publicly by
+Caddy. Error HTTP status matches the response envelope.
 
-Do not weaken a parity test to make an implementation pass. Document and test
-both retained behavior and any explicitly approved exception.
+Do not weaken a contract test to make an implementation pass. Document and
+test any explicitly approved behavior change.
 
 ## Required verification
 
@@ -82,7 +85,7 @@ npm run build
 For container or deployment changes, also build the Linux AMD64 image, render
 Compose, validate Caddy, and smoke-test `/healthz`, `/`, and `/api/menu`. OCR
 changes must run every golden fixture. Persistence, API, Slack, and scheduler
-changes must retain their legacy contract tests. Report exact commands and
+changes must retain their contract tests. Report exact commands and
 results; do not claim checks that were not run.
 
 ## Secrets and production safety
@@ -105,21 +108,6 @@ results; do not claim checks that were not run.
 - Normal deployment builds nothing on the VM. It pulls an immutable digest,
   backs up the DB, waits for local and public HTTPS health, and restores the
   starting release on failure.
-
-## Legacy removal gate
-
-Go tests are self-contained: the six Java-era OCR fixtures have byte-identical
-copies under `backend/internal/ocr/testdata/` and no backend test reads
-`src/test/resources/`. Still, delete Java/Gradle/old Nginx files only after:
-
-1. Go ordinary/race/vet/build, parity, frontend, and container checks pass.
-2. Production preserves DB, JSON, UI, HTTPS, and a real 09:00 Slack notification
-   through the agreed observation window.
-3. Go rollback is verified, credentials are rotated, and the user explicitly
-   closes the first-cutover rollback window.
-
-Perform legacy deletion as a separate cleanup, rerun every check, and update
-the README and migration runbook. Never delete live state or protected backups.
 
 ## Code and commits
 
