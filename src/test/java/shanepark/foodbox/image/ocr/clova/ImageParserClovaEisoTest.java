@@ -261,6 +261,93 @@ class ImageParserClovaEisoTest {
     }
 
     @Test
+    void parseJuly2026Menu() throws IOException {
+        // Given
+        Path imagePath = Paths.get("src/test/resources/eiso_202607.jpg");
+        Path jsonPath = Paths.get("src/test/resources/eiso_202607.json");
+
+        ImageMarginCalculatorEiso marginCalculator = new ImageMarginCalculatorEiso();
+        NaverClovaApi mockClovaApi = Mockito.mock(NaverClovaApi.class);
+
+        Clock fixedClock = Clock.fixed(
+                Instant.parse("2026-07-01T00:00:00Z"),
+                ZoneId.systemDefault()
+        );
+
+        ImageParserClovaEiso parser = new ImageParserClovaEiso(
+                marginCalculator,
+                mockClovaApi,
+                fixedClock
+        );
+
+        String jsonContent = Files.readString(jsonPath);
+        when(mockClovaApi.clovaRequest(anyString())).thenReturn(jsonContent);
+
+        // When
+        List<ParsedMenu> parsedMenus = parser.parse(imagePath);
+
+        // Then
+        assertThat(parsedMenus).hasSize(23);
+        assertThat(parsedMenus.stream()
+                .map(ParsedMenu::getDate)
+                .sorted()
+                .toList())
+                .containsExactly(
+                        LocalDate.of(2026, 7, 1),
+                        LocalDate.of(2026, 7, 2),
+                        LocalDate.of(2026, 7, 3),
+                        LocalDate.of(2026, 7, 6),
+                        LocalDate.of(2026, 7, 7),
+                        LocalDate.of(2026, 7, 8),
+                        LocalDate.of(2026, 7, 9),
+                        LocalDate.of(2026, 7, 10),
+                        LocalDate.of(2026, 7, 13),
+                        LocalDate.of(2026, 7, 14),
+                        LocalDate.of(2026, 7, 15),
+                        LocalDate.of(2026, 7, 16),
+                        LocalDate.of(2026, 7, 17),
+                        LocalDate.of(2026, 7, 20),
+                        LocalDate.of(2026, 7, 21),
+                        LocalDate.of(2026, 7, 22),
+                        LocalDate.of(2026, 7, 23),
+                        LocalDate.of(2026, 7, 24),
+                        LocalDate.of(2026, 7, 27),
+                        LocalDate.of(2026, 7, 28),
+                        LocalDate.of(2026, 7, 29),
+                        LocalDate.of(2026, 7, 30),
+                        LocalDate.of(2026, 7, 31)
+                );
+
+        ParsedMenu july01 = findMenuByDate(parsedMenus, LocalDate.of(2026, 7, 1));
+        assertThat(july01).isNotNull();
+        assertThat(july01.getMenus()).contains("육개장", "생선가스/타르소스", "천사채야채무침");
+
+        ParsedMenu july17 = findMenuByDate(parsedMenus, LocalDate.of(2026, 7, 17));
+        assertThat(july17).isNotNull();
+        assertThat(july17.getMenus()).containsExactly("제헌절");
+
+        ParsedMenu july06 = findMenuByDate(parsedMenus, LocalDate.of(2026, 7, 6));
+        assertThat(july06).isNotNull();
+        assertThat(july06.getMenus()).last().isEqualTo("김말이튀김");
+
+        parsedMenus.stream()
+                .filter(menu -> !menu.getDate().equals(LocalDate.of(2026, 7, 6)))
+                .filter(menu -> !menu.getDate().equals(LocalDate.of(2026, 7, 17)))
+                .forEach(menu -> assertThat(menu.getMenus())
+                        .as("Menu for %s should end with 꼬마김치", menu.getDate())
+                        .last()
+                        .isEqualTo("꼬마김치"));
+
+        assertThat(parsedMenus.stream()
+                .flatMap(menu -> menu.getMenus().stream()))
+                .doesNotContain("상기", "메뉴는 식자재", "수급 사정에 따라", "변경 될수", "있습니다.");
+
+        ParsedMenu july31 = findMenuByDate(parsedMenus, LocalDate.of(2026, 7, 31));
+        assertThat(july31).isNotNull();
+        assertThat(july31.getMenus()).contains("김치찌개", "생선가스", "옛날소세지전", "꼬마김치");
+    }
+
+    @Test
     void testMenuContentParsing() throws IOException {
         // Given
         Path imagePath = Paths.get("src/test/resources/eiso_202510.jpg");

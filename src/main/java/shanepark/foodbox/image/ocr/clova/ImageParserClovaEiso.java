@@ -35,6 +35,7 @@ public class ImageParserClovaEiso implements ImageParser {
 
     final Pattern DATE_PATTERN = Pattern.compile("\\d{1,2}월\\s*\\d{1,2}일");
     final Pattern DAY_NUMBER_PATTERN = Pattern.compile("\\d{1,2}");
+    private static final float MIN_INFER_CONFIDENCE = 0.6f;
 
     @Override
     public List<ParsedMenu> parse(Path path) throws IOException {
@@ -114,7 +115,7 @@ public class ImageParserClovaEiso implements ImageParser {
 
             String inferText = field.get("inferText").getAsString();
             float inferConfidence = field.get("inferConfidence").getAsFloat();
-            if (inferConfidence <= 0.8 || inferText.isEmpty()) {
+            if (inferConfidence <= MIN_INFER_CONFIDENCE || inferText.isEmpty()) {
                 continue;
             }
 
