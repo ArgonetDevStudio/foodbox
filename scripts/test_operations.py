@@ -212,6 +212,47 @@ class OperationTests(unittest.TestCase):
         self.assertNotIn("docker run", commands)
         self.assertFalse(list((self.root / ".deploy-state").glob("transaction.*")))
 
+    def test_deploy_blocks_unresolved_transactions_before_any_changes(self):
+        state = self.root / ".deploy-state"
+        state.mkdir()
+        self.root.joinpath(".env").chmod(0o640)
+        original_config = {
+            path: path.read_bytes() if path.exists() else None
+            for path in (
+                self.root / ".env",
+                self.root / "docker-compose.yml",
+                self.root / "deploy" / "Caddyfile",
+                self.root / ".deploy.env",
+            )
+        }
+        original_database = (self.root / "db" / "db.json").read_bytes()
+
+        for marker_name in ("transaction.crashed", "rollback.crashed"):
+            with self.subTest(marker=marker_name):
+                marker = state / marker_name
+                marker.symlink_to(state / "missing-transaction-state")
+                existing_markers = sorted(
+                    path.name for pattern in ("transaction.*", "rollback.*")
+                    for path in state.glob(pattern)
+                )
+
+                result = self._run_deploy()
+
+                self.assertEqual(result.returncode, 20, result.stdout + result.stderr)
+                self.assertIn("An unresolved deployment or rollback transaction exists", result.stderr)
+                self.assertFalse(self.log.exists())
+                self.assertFalse(list((self.root / "backups").glob("db-*")))
+                self.assertFalse(list((state / "preflight-backups").glob("db-*")))
+                self.assertEqual((self.root / "db" / "db.json").read_bytes(), original_database)
+                for path, content in original_config.items():
+                    self.assertEqual(path.read_bytes() if path.exists() else None, content)
+                self.assertEqual(self.root.joinpath(".env").stat().st_mode & 0o777, 0o640)
+                self.assertEqual(sorted(
+                    path.name for pattern in ("transaction.*", "rollback.*")
+                    for path in state.glob(pattern)
+                ), existing_markers)
+                marker.unlink()
+
     def test_first_cutover_corruption_restores_snapshot_and_stays_stopped(self):
         result = self._run_deploy(MOCK_CORRUPT_ONCE=True)
         self.assertEqual(result.returncode, 12, result.stdout + result.stderr)

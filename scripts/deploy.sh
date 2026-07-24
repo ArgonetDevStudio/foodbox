@@ -72,7 +72,6 @@ fi
 
 mkdir -p "$foodbox_root/deploy" "$foodbox_root/scripts" "$state_dir" "$backup_dir" \
   "$preflight_backup_dir"
-chmod 600 "$foodbox_root/.env"
 
 atomic_install() {
   local source=$1
@@ -137,6 +136,13 @@ if ! flock -w 300 9; then
   exit 20
 fi
 
+if compgen -G "$state_dir/transaction.*" >/dev/null || \
+  compgen -G "$state_dir/rollback.*" >/dev/null; then
+  echo "An unresolved deployment or rollback transaction exists; inspect production before deployment." >&2
+  exit 20
+fi
+
+chmod 600 "$foodbox_root/.env"
 transaction_dir=$(mktemp -d "$state_dir/transaction.XXXXXX")
 preserve_transaction=false
 cleanup_safe_transaction_on_exit() {
