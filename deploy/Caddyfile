@@ -3,7 +3,12 @@
 
 	log {
 		output stdout
-		format json
+		format filter {
+			wrap json
+			fields {
+				request>headers>X-Admin-Token delete
+			}
+		}
 	}
 
 	request_body {

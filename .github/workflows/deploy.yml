@@ -56,8 +56,11 @@ jobs:
           bash -n scripts/deploy.sh scripts/rollback.sh scripts/job.sh
           PYTHONPYCACHEPREFIX="$RUNNER_TEMP/foodbox-pycache" \
             python3 -m py_compile scripts/db_snapshot.py scripts/db_restore.py scripts/db_validate.py \
-              scripts/test_operations.py
+              scripts/test_operations.py scripts/test_caddy.py
           python3 scripts/test_operations.py -v
+
+      - name: Verify Caddy access-log redaction
+        run: python3 scripts/test_caddy.py -v
 
       - name: Build backend
         working-directory: backend
