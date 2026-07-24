@@ -25,23 +25,32 @@ func ParseEisoDate(value string, today domain.LocalDate) (domain.LocalDate, erro
 
 func resolveClosestDate(today domain.LocalDate, month, day int) (domain.LocalDate, error) {
 	todayTime := time.Date(today.Year, time.Month(today.Month), today.Day, 0, 0, 0, 0, time.UTC)
-	current, ok := strictDate(today.Year, month, day)
-	if !ok {
-		return domain.LocalDate{}, fmt.Errorf("invalid Eisodosirak date: %d월 %d일", month, day)
-	}
-	if dayDifference(current, todayTime) <= 45 {
+	current, currentValid := strictDate(today.Year, month, day)
+	if currentValid && dayDifference(current, todayTime) <= 45 {
 		return localDate(current), nil
 	}
-	previous, _ := strictDate(today.Year-1, month, day)
-	next, _ := strictDate(today.Year+1, month, day)
-	closest := current
-	closestDifference := dayDifference(current, todayTime)
-	if difference := dayDifference(previous, todayTime); difference < closestDifference {
-		closest = previous
-		closestDifference = difference
+
+	candidates := make([]time.Time, 0, 3)
+	if currentValid {
+		candidates = append(candidates, current)
 	}
-	if difference := dayDifference(next, todayTime); difference < closestDifference {
-		closest = next
+	if previous, valid := strictDate(today.Year-1, month, day); valid {
+		candidates = append(candidates, previous)
+	}
+	if next, valid := strictDate(today.Year+1, month, day); valid {
+		candidates = append(candidates, next)
+	}
+	if len(candidates) == 0 {
+		return domain.LocalDate{}, fmt.Errorf("invalid Eisodosirak date in adjacent years: %d월 %d일", month, day)
+	}
+
+	closest := candidates[0]
+	closestDifference := dayDifference(closest, todayTime)
+	for _, candidate := range candidates[1:] {
+		if difference := dayDifference(candidate, todayTime); difference < closestDifference {
+			closest = candidate
+			closestDifference = difference
+		}
 	}
 	return localDate(closest), nil
 }

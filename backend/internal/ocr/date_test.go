@@ -41,3 +41,52 @@ func TestParseEisoDateRejectsInvalidValues(t *testing.T) {
 		}
 	}
 }
+
+func TestParseEisoDateLeapDayUsesOnlyValidAdjacentYearCandidates(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		today domain.LocalDate
+		want  domain.LocalDate
+	}{
+		{
+			name:  "current leap year remains the only valid candidate",
+			today: domain.LocalDate{Year: 2024, Month: 12, Day: 31},
+			want:  domain.LocalDate{Year: 2024, Month: 2, Day: 29},
+		},
+		{
+			name:  "previous leap year from non-leap current year",
+			today: domain.LocalDate{Year: 2025, Month: 1, Day: 10},
+			want:  domain.LocalDate{Year: 2024, Month: 2, Day: 29},
+		},
+		{
+			name:  "next leap year from non-leap current year",
+			today: domain.LocalDate{Year: 2027, Month: 12, Day: 20},
+			want:  domain.LocalDate{Year: 2028, Month: 2, Day: 29},
+		},
+		{
+			name:  "current leap year within 45 days",
+			today: domain.LocalDate{Year: 2024, Month: 3, Day: 30},
+			want:  domain.LocalDate{Year: 2024, Month: 2, Day: 29},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ParseEisoDate("02월 29일", test.today)
+			if err != nil {
+				t.Fatalf("ParseEisoDate() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("ParseEisoDate() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseEisoDateLeapDayRejectsWhenAdjacentYearsAreNotLeapYears(t *testing.T) {
+	t.Parallel()
+	_, err := ParseEisoDate("02월 29일", domain.LocalDate{Year: 2026, Month: 7, Day: 1})
+	if err == nil {
+		t.Fatal("ParseEisoDate() error = nil, want error when previous, current, and next years are non-leap")
+	}
+}

@@ -179,6 +179,17 @@ func TestReadySupportsRepositoriesWithoutWriteCapability(t *testing.T) {
 	}
 }
 
+func TestReadyChecksPersistedImageHashMetadata(t *testing.T) {
+	metadataError := errors.New("corrupt metadata JSON")
+	hashes := &memoryHashStore{loadErr: metadataError}
+	service := NewMenuService(newMemoryRepository(), nil, nil, nil, hashes)
+
+	err := service.Ready(context.Background())
+	if !errors.Is(err, metadataError) {
+		t.Fatalf("error = %v, want wrapped metadata error", err)
+	}
+}
+
 func TestTodayReturnsExistingMenuWithoutCrawl(t *testing.T) {
 	date := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
 	want := domain.NewMenu(date, []string{"one", "two", "three"})
@@ -222,22 +233,32 @@ func TestTodayCrawlsOnceAndRetriesRepository(t *testing.T) {
 }
 
 func TestTodayReturnsTypedNotUploadedError(t *testing.T) {
-	repository := newMemoryRepository()
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	future := domain.NewMenu(
+		domain.LocalDate{Year: 2026, Month: 7, Day: 28},
+		[]string{"future", "menu", "coverage"},
+	)
+	repository := newMemoryRepository(future)
 	hashes := &memoryHashStore{hash: "same"}
 	path := writeImage(t, []byte("image"))
-	// Make the existing hash match so the crawl is a successful no-op.
 	hashes.hash = "78805a221a988e79ef3f42d7c5bfd418"
+	ocrCalls := 0
 	service := NewMenuService(repository, crawlerFunc(func(context.Context) (string, error) {
 		return path, nil
 	}), ocrFunc(func(context.Context, []byte) ([]byte, error) {
-		return nil, errors.New("OCR must not be called for a matching hash")
-	}), parserFunc(func([]byte, io.Reader, domain.LocalDate) ([]domain.Menu, error) {
-		return nil, errors.New("parser must not be called for a matching hash")
-	}), hashes)
+		ocrCalls++
+		return []byte("ocr"), nil
+	}), successfulParser(future), hashes, WithDateClock(func() domain.LocalDate { return today }))
 
-	_, err := service.Today(context.Background(), domain.LocalDate{Year: 2026, Month: 7, Day: 27})
+	_, err := service.Today(context.Background(), today)
 	if !errors.Is(err, ErrMenuNotUploaded) {
 		t.Fatalf("error = %v", err)
+	}
+	if got := err.Error(); got != "Today Menu is not uploaded yet" {
+		t.Fatalf("error message = %q", got)
+	}
+	if ocrCalls != 1 {
+		t.Fatalf("OCR calls = %d, want 1", ocrCalls)
 	}
 	statusError, ok := ErrMenuNotUploaded.(interface {
 		HTTPStatus() int
@@ -245,6 +266,115 @@ func TestTodayReturnsTypedNotUploadedError(t *testing.T) {
 	})
 	if !ok || statusError.HTTPStatus() != 404 || statusError.ErrorCode() != "MENU_NOT_UPLOADED" {
 		t.Fatalf("missing HTTP error metadata: %#v", ErrMenuNotUploaded)
+	}
+}
+
+func TestMatchingImageHashRetriesWhenRepositoryCoverageIsMissing(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	past := domain.NewMenu(domain.LocalDate{Year: 2026, Month: 7, Day: 24}, []string{"old", "menu", "only"})
+	parsed := domain.NewMenu(today, []string{"new", "menu", "today"})
+	future := domain.NewMenu(domain.LocalDate{Year: 2026, Month: 7, Day: 28}, []string{"future", "menu", "only"})
+	tests := []struct {
+		name  string
+		menus []domain.Menu
+	}{
+		{name: "empty database"},
+		{name: "stale database", menus: []domain.Menu{past}},
+		{name: "today missing with future coverage", menus: []domain.Menu{future}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeImage(t, []byte("image"))
+			repository := newMemoryRepository(test.menus...)
+			hashes := &memoryHashStore{hash: "78805a221a988e79ef3f42d7c5bfd418"}
+			var ocrCalls int
+			service := NewMenuService(
+				repository,
+				crawlerFunc(func(context.Context) (string, error) { return path, nil }),
+				ocrFunc(func(context.Context, []byte) ([]byte, error) {
+					ocrCalls++
+					return []byte("ocr"), nil
+				}),
+				successfulParser(parsed),
+				hashes,
+				WithDateClock(func() domain.LocalDate { return today }),
+			)
+
+			result, err := service.CrawlWithOptions(context.Background(), CrawlOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Skipped || ocrCalls != 1 || repository.saveCalls != 1 || hashes.saveCalls != 1 {
+				t.Fatalf("result=%+v OCR=%d repo saves=%d hash saves=%d", result, ocrCalls, repository.saveCalls, hashes.saveCalls)
+			}
+		})
+	}
+}
+
+func TestTodayMissingDateRetriesMatchingImageAndReturnsRecoveredMenu(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	want := domain.NewMenu(today, []string{"new", "menu", "today"})
+	repository := newMemoryRepository(domain.NewMenu(
+		domain.LocalDate{Year: 2026, Month: 7, Day: 24},
+		[]string{"old", "menu", "only"},
+	))
+	path := writeImage(t, []byte("image"))
+	hashes := &memoryHashStore{hash: "78805a221a988e79ef3f42d7c5bfd418"}
+	service := NewMenuService(
+		repository,
+		crawlerFunc(func(context.Context) (string, error) { return path, nil }),
+		ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
+		successfulParser(want),
+		hashes,
+		WithDateClock(func() domain.LocalDate { return today }),
+	)
+
+	got, err := service.Today(context.Background(), today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Date != want.Date || len(got.Menus) != len(want.Menus) || repository.saveCalls != 1 {
+		t.Fatalf("menu=%+v repo saves=%d", got, repository.saveCalls)
+	}
+}
+
+func TestMatchingImageHashSkipsWhenRepositoryHasCurrentCoverage(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 7, Day: 27}
+	tests := []struct {
+		name string
+		menu domain.Menu
+	}{
+		{name: "valid today is present", menu: domain.NewMenu(today, []string{"a", "b", "c"})},
+		{name: "invalid today is present", menu: domain.NewMenu(today, []string{"holiday"})},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeImage(t, []byte("image"))
+			repository := newMemoryRepository(test.menu)
+			hashes := &memoryHashStore{hash: "78805a221a988e79ef3f42d7c5bfd418"}
+			var ocrCalls int
+			service := NewMenuService(
+				repository,
+				crawlerFunc(func(context.Context) (string, error) { return path, nil }),
+				ocrFunc(func(context.Context, []byte) ([]byte, error) {
+					ocrCalls++
+					return []byte("ocr"), nil
+				}),
+				successfulParser(test.menu),
+				hashes,
+				WithDateClock(func() domain.LocalDate { return today }),
+			)
+
+			result, err := service.CrawlWithOptions(context.Background(), CrawlOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Skipped || ocrCalls != 0 || repository.saveCalls != 0 || hashes.saveCalls != 0 {
+				t.Fatalf("result=%+v OCR=%d repo saves=%d hash saves=%d", result, ocrCalls, repository.saveCalls, hashes.saveCalls)
+			}
+		})
 	}
 }
 
@@ -339,6 +469,7 @@ func TestCrawlDryRunParsesWithoutMutatingState(t *testing.T) {
 		ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
 		successfulParser(menu),
 		hashes,
+		WithDateClock(fixedDate(2026, 7, 27)),
 	)
 
 	result, err := service.CrawlWithOptions(context.Background(), CrawlOptions{DryRun: true})
@@ -370,6 +501,7 @@ func TestConcurrentCrawlsUseOneOCRCallForIdenticalImages(t *testing.T) {
 		}),
 		successfulParser(menu),
 		hashes,
+		WithDateClock(fixedDate(2026, 7, 27)),
 	)
 
 	start := make(chan struct{})

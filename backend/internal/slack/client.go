@@ -65,21 +65,29 @@ func NewClient(baseURL, token string, options ...Option) (*Client, error) {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, errors.New("slack URL must be an absolute URL")
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, errors.New("slack URL must use HTTP or HTTPS")
+	if parsed.Scheme != "https" {
+		return nil, errors.New("slack URL must use HTTPS")
 	}
 
 	c := &Client{
-		endpoint: endpoint,
-		httpClient: &http.Client{
-			Timeout: defaultTimeout,
-		},
+		endpoint:        endpoint,
+		httpClient:      newHTTPClient(nil),
 		maxResponseSize: defaultResponseSize,
 	}
 	for _, option := range options {
 		option(c)
 	}
 	return c, nil
+}
+
+func newHTTPClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
+		Transport: transport,
+		Timeout:   defaultTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 func (c *Client) Send(ctx context.Context, message Message) error {

@@ -85,21 +85,41 @@ func TestRunnerWaitsForReadinessBeforeStartup(t *testing.T) {
 	}
 }
 
-func TestRunnerPreventsStartupAndDailyOverlap(t *testing.T) {
+func TestRunnerQueuesDailyUntilStartupCompletes(t *testing.T) {
 	location := SeoulLocation()
 	initial := time.Date(2026, time.July, 25, 8, 0, 0, 0, location)
 	clock := &fakeClock{now: initial}
 	startupStarted := make(chan struct{})
 	releaseStartup := make(chan struct{})
 	dailyCalled := make(chan struct{}, 1)
+	var activeJobs int
+	var activeJobsMutex sync.Mutex
+	overlapped := false
+	enterJob := func() {
+		activeJobsMutex.Lock()
+		defer activeJobsMutex.Unlock()
+		activeJobs++
+		if activeJobs > 1 {
+			overlapped = true
+		}
+	}
+	leaveJob := func() {
+		activeJobsMutex.Lock()
+		defer activeJobsMutex.Unlock()
+		activeJobs--
+	}
 	runner, err := NewRunner(Options{
 		Clock: clock,
 		Startup: func(context.Context) error {
+			enterJob()
+			defer leaveJob()
 			close(startupStarted)
 			<-releaseStartup
 			return nil
 		},
 		Daily: func(context.Context) error {
+			enterJob()
+			defer leaveJob()
 			dailyCalled <- struct{}{}
 			return nil
 		},
@@ -129,6 +149,75 @@ func TestRunnerPreventsStartupAndDailyOverlap(t *testing.T) {
 	}
 
 	close(releaseStartup)
+	select {
+	case <-dailyCalled:
+	case <-time.After(time.Second):
+		t.Fatal("queued daily job did not run after startup completed")
+	}
+	activeJobsMutex.Lock()
+	if overlapped {
+		t.Fatal("startup and daily jobs overlapped")
+	}
+	activeJobsMutex.Unlock()
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestRunnerCoalescesPendingDailyTicks(t *testing.T) {
+	location := SeoulLocation()
+	initial := time.Date(2026, time.July, 25, 8, 0, 0, 0, location)
+	clock := &fakeClock{now: initial}
+	startupStarted := make(chan struct{})
+	releaseStartup := make(chan struct{})
+	dailyCalled := make(chan struct{}, 2)
+	runner, err := NewRunner(Options{
+		Clock: clock,
+		Startup: func(context.Context) error {
+			close(startupStarted)
+			<-releaseStartup
+			return nil
+		},
+		Daily: func(context.Context) error {
+			dailyCalled <- struct{}{}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	ready := make(chan struct{})
+	close(ready)
+	go func() { done <- runner.Run(ctx, ready) }()
+
+	select {
+	case <-startupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not start")
+	}
+	waitForTimers(t, clock, 1)
+	clock.fire(time.Date(2026, time.July, 25, 9, 0, 0, 0, location))
+	waitForTimers(t, clock, 2)
+	clock.fire(time.Date(2026, time.July, 26, 9, 0, 0, 0, location))
+	waitForTimers(t, clock, 3)
+
+	close(releaseStartup)
+	select {
+	case <-dailyCalled:
+	case <-time.After(time.Second):
+		t.Fatal("coalesced daily job did not run")
+	}
+	select {
+	case <-dailyCalled:
+		t.Fatal("pending daily ticks were not coalesced")
+	case <-time.After(20 * time.Millisecond):
+	}
+
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run() error = %v", err)

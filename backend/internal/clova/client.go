@@ -71,8 +71,8 @@ func NewClient(endpoint, secret string, options ...Option) (*Client, error) {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, errors.New("clova endpoint must be an absolute URL")
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, errors.New("clova endpoint must use HTTP or HTTPS")
+	if parsed.Scheme != "https" {
+		return nil, errors.New("clova endpoint must use HTTPS")
 	}
 	if endpoint == "" {
 		return nil, errors.New("clova endpoint is required")
@@ -82,11 +82,9 @@ func NewClient(endpoint, secret string, options ...Option) (*Client, error) {
 	}
 
 	c := &Client{
-		endpoint: endpoint,
-		secret:   secret,
-		httpClient: &http.Client{
-			Timeout: defaultTimeout,
-		},
+		endpoint:        endpoint,
+		secret:          secret,
+		httpClient:      newHTTPClient(nil),
 		maxResponseSize: defaultResponseSize,
 		maxImageSize:    defaultImageSize,
 		now:             time.Now,
@@ -95,6 +93,16 @@ func NewClient(endpoint, secret string, options ...Option) (*Client, error) {
 		option(c)
 	}
 	return c, nil
+}
+
+func newHTTPClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
+		Transport: transport,
+		Timeout:   defaultTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 type requestBody struct {

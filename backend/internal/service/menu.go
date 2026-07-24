@@ -23,7 +23,7 @@ var (
 
 type menuNotUploadedError struct{}
 
-func (menuNotUploadedError) Error() string     { return "menu not uploaded" }
+func (menuNotUploadedError) Error() string     { return "Today Menu is not uploaded yet" }
 func (menuNotUploadedError) HTTPStatus() int   { return 404 }
 func (menuNotUploadedError) ErrorCode() string { return "MENU_NOT_UPLOADED" }
 
@@ -153,6 +153,11 @@ func (s *MenuService) Ready(ctx context.Context) error {
 			return fmt.Errorf("menu repository is not writable: %w", err)
 		}
 	}
+	if s.hashes != nil {
+		if _, err := s.hashes.Load(ctx); err != nil {
+			return fmt.Errorf("read image hash metadata: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -242,7 +247,13 @@ func (s *MenuService) CrawlWithOptions(ctx context.Context, options CrawlOptions
 		return CrawlResult{}, fmt.Errorf("load image hash: %w", err)
 	}
 	if hash == lastHash && !options.DryRun {
-		return CrawlResult{Hash: hash, Skipped: true}, nil
+		covered, err := s.hasCurrentCoverage(ctx)
+		if err != nil {
+			return CrawlResult{}, err
+		}
+		if covered {
+			return CrawlResult{Hash: hash, Skipped: true}, nil
+		}
 	}
 
 	menus, err := s.parse(ctx, image)
@@ -295,6 +306,17 @@ func (s *MenuService) parse(ctx context.Context, image []byte) ([]domain.Menu, e
 		return nil, ErrNoMenusParsed
 	}
 	return menus, nil
+}
+
+// hasCurrentCoverage prevents a persisted image hash from suppressing recovery
+// of a missing current-day record. Future records alone are not enough because
+// Today must still be able to repair a gap in an otherwise fresh database.
+func (s *MenuService) hasCurrentCoverage(ctx context.Context) (bool, error) {
+	_, found, err := s.repository.FindByDate(ctx, s.now())
+	if err != nil {
+		return false, fmt.Errorf("check menu coverage: %w", err)
+	}
+	return found, nil
 }
 
 // RefreshIfStale refreshes the database when it has no menu beyond today. It is

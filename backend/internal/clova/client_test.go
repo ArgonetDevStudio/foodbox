@@ -18,7 +18,7 @@ func TestRecognizeSendsV1RequestAndReturnsTypedAndRawResponse(t *testing.T) {
 	image := append([]byte{0xff, 0xd8, 0xff}, []byte("jpeg")...)
 	responseJSON := `{"version":"V1","requestId":"req","timestamp":1,"images":[{"inferResult":"SUCCESS","fields":[{"inferText":"rice","inferConfidence":0.99}]}]}`
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s", r.Method)
 		}
@@ -43,7 +43,7 @@ func TestRecognizeSendsV1RequestAndReturnsTypedAndRawResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(server.URL, "top-secret", withClock(func() time.Time { return fixedTime }))
+	client, err := NewClient(server.URL, "top-secret", WithHTTPClient(server.Client()), withClock(func() time.Time { return fixedTime }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestRecognizeSendsV1RequestAndReturnsTypedAndRawResponse(t *testing.T) {
 
 func TestRecognizeDetectsPNG(t *testing.T) {
 	png := append([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, []byte("data")...)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request requestBody
 		_ = json.NewDecoder(r.Body).Decode(&request)
 		if got := request.Images[0].Format; got != "png" {
@@ -71,27 +71,27 @@ func TestRecognizeDetectsPNG(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "secret")
+	client, _ := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
 	if _, _, err := client.Recognize(context.Background(), png); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRecognizeRejectsUnsupportedImageBeforeRequest(t *testing.T) {
-	client, _ := NewClient("http://unused.invalid", "secret")
+	client, _ := NewClient("https://unused.invalid", "secret")
 	if _, _, err := client.Recognize(context.Background(), []byte("gif")); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestRecognizeReturnsStatusWithoutLeakingSecret(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, "denied")
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "never-print-me")
+	client, _ := NewClient(server.URL, "never-print-me", WithHTTPClient(server.Client()))
 	_, raw, err := client.Recognize(context.Background(), []byte{0xff, 0xd8, 0xff})
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("error = %v", err)
@@ -102,19 +102,19 @@ func TestRecognizeReturnsStatusWithoutLeakingSecret(t *testing.T) {
 }
 
 func TestRecognizeLimitsResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "12345")
 	}))
 	defer server.Close()
 
-	client, _ := NewClient(server.URL, "secret", WithMaxResponseSize(4))
+	client, _ := NewClient(server.URL, "secret", WithHTTPClient(server.Client()), WithMaxResponseSize(4))
 	if _, _, err := client.Recognize(context.Background(), []byte{0xff, 0xd8, 0xff}); err == nil {
 		t.Fatal("expected response size error")
 	}
 }
 
 func TestRecognizeLimitsImageBeforeRequest(t *testing.T) {
-	client, _ := NewClient("http://unused.invalid", "secret", WithMaxImageSize(3))
+	client, _ := NewClient("https://unused.invalid", "secret", WithMaxImageSize(3))
 	image := []byte{0xff, 0xd8, 0xff, 0x00}
 	if _, _, err := client.Recognize(context.Background(), image); err == nil {
 		t.Fatal("expected image size error")
@@ -132,5 +132,42 @@ func TestRecognizeSanitizesTransportError(t *testing.T) {
 	_, _, err := client.Recognize(context.Background(), []byte{0xff, 0xd8, 0xff})
 	if err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("unsafe error: %v", err)
+	}
+}
+
+func TestNewClientRejectsHTTP(t *testing.T) {
+	if _, err := NewClient("http://example.com/ocr", "secret"); err == nil {
+		t.Fatal("expected HTTP endpoint rejection")
+	}
+}
+
+func TestRecognizeDoesNotFollowRedirectWithSecretHeader(t *testing.T) {
+	redirectReached := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirectReached <- struct{}{}
+	}))
+	defer target.Close()
+
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-OCR-SECRET"); got != "top-secret" {
+			t.Errorf("source secret header = %q", got)
+		}
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	httpClient := newHTTPClient(source.Client().Transport)
+	client, err := NewClient(source.URL, "top-secret", WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = client.Recognize(context.Background(), []byte{0xff, 0xd8, 0xff})
+	if err == nil || !strings.Contains(err.Error(), "307") {
+		t.Fatalf("error = %v", err)
+	}
+	select {
+	case <-redirectReached:
+		t.Fatal("redirect target received credential-bearing request")
+	default:
 	}
 }

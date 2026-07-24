@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -34,7 +33,9 @@ type Runner struct {
 	startup   Job
 	daily     Job
 	onError   func(error)
-	running   atomic.Bool
+	stateMu   sync.Mutex
+	running   bool
+	pending   bool
 	waitGroup sync.WaitGroup
 }
 
@@ -105,23 +106,60 @@ func (runner *Runner) Run(ctx context.Context, ready <-chan struct{}) error {
 			timer.Stop()
 			return nil
 		case <-timer.C():
-			runner.start(workContext, runner.daily)
+			runner.scheduleDaily(workContext)
 		}
 	}
 }
 
 func (runner *Runner) start(ctx context.Context, job Job) bool {
-	if !runner.running.CompareAndSwap(false, true) {
+	runner.stateMu.Lock()
+	defer runner.stateMu.Unlock()
+	if runner.running || ctx.Err() != nil {
 		return false
 	}
+	runner.running = true
 
 	runner.waitGroup.Add(1)
-	go func() {
-		defer runner.waitGroup.Done()
-		defer runner.running.Store(false)
+	go runner.run(ctx, job)
+	return true
+}
+
+func (runner *Runner) scheduleDaily(ctx context.Context) {
+	runner.stateMu.Lock()
+	if ctx.Err() != nil {
+		runner.stateMu.Unlock()
+		return
+	}
+	if runner.running {
+		runner.pending = true
+		runner.stateMu.Unlock()
+		return
+	}
+	runner.running = true
+	runner.waitGroup.Add(1)
+	runner.stateMu.Unlock()
+
+	go runner.run(ctx, runner.daily)
+}
+
+func (runner *Runner) run(ctx context.Context, job Job) {
+	defer runner.waitGroup.Done()
+
+	for {
 		if err := job(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			runner.onError(err)
 		}
-	}()
-	return true
+
+		runner.stateMu.Lock()
+		if runner.pending && ctx.Err() == nil {
+			runner.pending = false
+			runner.stateMu.Unlock()
+			job = runner.daily
+			continue
+		}
+		runner.pending = false
+		runner.running = false
+		runner.stateMu.Unlock()
+		return
+	}
 }
