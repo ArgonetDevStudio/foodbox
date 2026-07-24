@@ -4,7 +4,7 @@ Foodbox downloads the Eisodosirak lunch menu image, parses it with Naver Clova
 OCR, keeps the result in a file database, renders a Svelte calendar, and sends
 daily Slack notifications.
 
-Production now runs as two small containers:
+The new production design runs as two small containers:
 
 - one non-root Go application containing the API, scheduler, OCR pipeline, file
   store, and compiled Svelte assets;
@@ -12,8 +12,11 @@ Production now runs as two small containers:
   proxying to the application.
 
 The previous Spring Boot implementation remains in `src/` as legacy reference
-code and a temporary rollback aid. It is not built by the current production
-Dockerfile or GitHub Actions workflows.
+code during the first-cutover rollback window. It is not built by the current
+production Dockerfile or GitHub Actions workflows. A real Spring rollback uses
+the preserved server-side legacy Compose/JAR/images or Git history, not the new
+root Dockerfile. Until the cutover is accepted, the Oracle VM may still be
+serving the legacy stack.
 
 For the production cutover, credential rotation, backup, and rollback runbook,
 see [docs/MIGRATION.md](docs/MIGRATION.md).
@@ -53,7 +56,7 @@ cd backend
 set -a
 source ../.env
 set +a
-go run ./cmd/foodbox
+DB_FILE_DIR=../db STATIC_DIR=../front/dist go run ./cmd/foodbox
 ```
 
 For a production-like local build that bundles the frontend and uses the image
@@ -62,6 +65,7 @@ runtime defaults:
 ```bash
 docker build --tag foodbox-local .
 docker run --rm --env-file .env --publish 8080:8080 \
+  --env DB_FILE_DIR=/data --env STATIC_DIR=/app/static \
   --volume foodbox-local-data:/data foodbox-local
 ```
 
@@ -71,6 +75,36 @@ Then check the readiness endpoint and menu API:
 curl --fail http://127.0.0.1:8080/healthz
 curl --fail http://127.0.0.1:8080/api/menu
 ```
+
+## Verification
+
+Run the full backend verification from `backend/`:
+
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
+go build ./cmd/foodbox
+```
+
+Run the frontend build from `front/`:
+
+```bash
+npm ci
+npm run build
+```
+
+The Go tests deliberately pin behavior that existing users can observe. They
+cover the legacy file-database representation and upsert order, exact public API
+JSON, Slack payload and Korean message text, 09:00 Asia/Seoul scheduling,
+startup/schedule overlap, OCR date edge cases, and complete golden-menu output
+for the retained OCR fixtures. Run both the ordinary and race suites before
+changing persistence, crawling, OCR, API, scheduling, or Slack behavior.
+
+Container and deployment changes should additionally render Compose, build the
+Linux AMD64 image, and smoke-test `/healthz`, `/`, and `/api/menu`. CI performs
+the clean-checkout backend, frontend, and container builds before a production
+image is published.
 
 ## Configuration
 
@@ -130,16 +164,19 @@ now require `POST`.
 
 ## Persistence and scheduling
 
-- `db.json` keeps the existing Spring/Jackson date representation and remains
-  backward-compatible with the legacy application.
+- `db.json` keeps the existing Spring/Jackson `[year,month,day]`, `menus`, and
+  `valid` representation and remains backward-compatible with the legacy
+  application. Disk records are oldest first; `/api/menu` is newest first.
 - `metadata.json` persists the last successfully processed image hash, avoiding
-  duplicate OCR work across restarts.
+  duplicate OCR work across restarts. A matching hash is skipped only while the
+  database still contains today's menu, so missing state can repair itself.
 - Writes use a unique temporary file, file and directory sync, and atomic
   replacement. Only one application instance may own the volume.
 - Startup refresh runs after the HTTP server becomes ready and does not block
   readiness on vendor or Clova availability.
-- Slack notification runs once daily in Seoul time. Startup refresh and daily
-  notification cannot overlap.
+- Slack notification runs once daily at 09:00 Seoul time. Startup refresh and
+  daily notification cannot overlap; a 09:00 tick during refresh is queued and
+  sent after refresh completes.
 
 ## CI/CD
 
@@ -156,15 +193,47 @@ deployment. It pulls an immutable digest, backs up the file database, starts the
 stack, and accepts the release only after Compose health checks and the public
 HTTPS health check succeed.
 
+Application credentials are never sent by the workflow. They remain in the
+Oracle VM's protected `.env`. The GitHub `production` Environment contains only
+the SSH deployment secrets and optional `DEPLOY_PATH` / `PUBLIC_URL` variables.
+The GHCR package must either be publicly readable or the VM must already be
+logged in with a narrowly scoped read-only package credential.
+
+A push to `main` starts deployment. If the `production` Environment has required
+reviewers, the immutable image is built and published first, then the server
+step waits for approval. The server locks concurrent releases, backs up
+`db.json`, pulls the digest, waits for Compose and public HTTPS health checks,
+and restores the starting release if validation fails.
+
+After two successful Go deployments, the `Roll back production` workflow can be
+manually dispatched from `main` to restore and verify the previously successful
+digest. The first cutover from Spring has no previous Go digest; use the manual
+Spring recovery procedure in [docs/MIGRATION.md](docs/MIGRATION.md). Never run
+`docker compose down -v` because the Caddy volumes contain certificate state.
+
 ## Legacy Spring implementation
 
 The Java/Gradle files and Spring tests are intentionally retained during the
-migration window. They document historical behavior and allow a controlled
-first-cutover rollback. They have known operational and security limitations,
-including server-side builds, a larger JVM runtime, unauthenticated management
-GET routes, secret-bearing ignored development resources in old JARs, and
-secret disclosure in old startup logs.
+migration window to document historical behavior. The first-cutover rollback
+also requires the preserved server-side legacy Compose/JAR/images or Git
+history. The legacy implementation has known operational and security
+limitations, including server-side builds, a larger JVM runtime,
+unauthenticated management GET routes, secret-bearing ignored development
+resources in old JARs, and secret disclosure in old startup logs.
+
+The Java-era OCR image and response fixtures have byte-identical copies under
+`backend/internal/ocr/testdata/`, and the Go tests no longer read
+`src/test/resources/`. The Go verification suite is therefore independent of
+the legacy source tree, but production acceptance is still required before
+deleting that tree.
 
 Do not use the legacy build as the source of production credentials. After the
 Go cutover and rollback window are complete, remove old JARs, images, logs, and
 ignored development configuration as described in the migration runbook.
+
+Remove the legacy source and tests only after the full Go unit, race, parity,
+OCR golden, frontend, and container checks pass; production has preserved the
+database, JSON API, HTTPS, UI, and a real scheduled 09:00 Slack notification for
+the agreed observation window; rotated credentials are the only active ones;
+and the user explicitly closes the first-cutover rollback window. Perform that
+deletion as a separate cleanup with another complete verification pass.
