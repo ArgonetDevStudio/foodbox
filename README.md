@@ -1,229 +1,170 @@
 # Foodbox
 
-Foodbox downloads Eisodosirak menu images, parses them with Naver Clova OCR, stores the results in a file-based database, and exposes the lunch menu through a web calendar and Slack notifications.
+Foodbox downloads the Eisodosirak lunch menu image, parses it with Naver Clova
+OCR, keeps the result in a file database, renders a Svelte calendar, and sends
+daily Slack notifications.
 
-![preview](README.assets/preview.png)
+Production now runs as two small containers:
 
-## Tech Stack
+- one non-root Go application containing the API, scheduler, OCR pipeline, file
+  store, and compiled Svelte assets;
+- Caddy as the only host-facing service, providing automatic HTTPS and reverse
+  proxying to the application.
 
-- Backend: Spring Boot 3.5.14, Java 25, Gradle
-- Frontend: Svelte 5, Vite
-- OCR: Naver Clova OCR
-- Crawling: JSoup, image download
-- Storage: file-based JSON database
-- Deployment: Docker Compose, Nginx
+The previous Spring Boot implementation remains in `src/` as legacy reference
+code and a temporary rollback aid. It is not built by the current production
+Dockerfile or GitHub Actions workflows.
 
-## Quick Start
+For the production cutover, credential rotation, backup, and rollback runbook,
+see [docs/MIGRATION.md](docs/MIGRATION.md).
 
-### 1. Prerequisites
+## Requirements
 
-- Java 25
-- Node.js 20+
-- npm
-- Docker / Docker Compose, if running the production-like stack
+- Go 1.26.5
+- Node.js 24 and npm
+- Docker with Docker Compose v2 for container testing or deployment
 
-### 2. Environment Variables
+## Local development
 
-Create a `.env` file from `.env.example` before running the app locally.
-
-```bash
-cp .env.example .env
-```
-
-Required values:
-
-```properties
-SLACK_TOKEN=your_slack_bot_token_here
-SLACK_CHANNEL=#your_slack_channel_here
-CRAWL_URL=https://eisodosirak.itpage.kr/bbs/board.php?bo_table=basic4
-CLOVA_URL=your_clova_api_url_here
-CLOVA_SECRET_KEY=your_clova_secret_key_here
-```
-
-`DB_FILE_DIR` is optional. The development profile uses `/tmp/foodbox/db` by default.
-
-Docker Compose reads `.env` automatically. When running locally with `./gradlew bootRun`, export the environment variables in the same terminal first.
+Backend tests do not require production credentials:
 
 ```bash
-set -a
-source .env
-set +a
+cd backend
+go test ./...
 ```
 
-### 3. Run Backend
-
-For development, run the backend with the `dev` profile because the frontend Vite proxy forwards API requests to `localhost:8080`.
-
-```bash
-set -a
-source .env
-set +a
-SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
-```
-
-Check the backend:
-
-```bash
-curl http://localhost:8080/api/menu
-```
-
-### 4. Run Frontend
-
-Run the frontend in a separate terminal.
+Build the frontend:
 
 ```bash
 cd front
-npm install
-npm run dev
-```
-
-Open `http://localhost:5173` in your browser. Frontend `/api/*` requests are proxied to `http://localhost:8080` by `front/vite.config.js`.
-
-## Common Commands
-
-### Backend
-
-```bash
-./gradlew clean build
-./gradlew test
-SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
-```
-
-### Frontend
-
-```bash
-cd front
-npm install
-npm run dev
+npm ci
 npm run build
-npm run preview
 ```
 
-### Docker Compose
-
-Build the backend JAR before starting Docker.
+The Go process reads configuration only from its environment; it does not load
+`.env` itself. Copy `.env.example` to the repository-local `.env`, replace every
+placeholder outside version control, export that file in the shell, and then
+run the application from `backend/`. When running from that directory, make
+sure the database and static-directory variables resolve to the repository's
+`db/` and `front/dist/` directories.
 
 ```bash
-./gradlew clean build
-docker compose up -d
-docker compose logs -f foodbox-backend
+cd backend
+set -a
+source ../.env
+set +a
+go run ./cmd/foodbox
 ```
 
-Compose services:
+For a production-like local build that bundles the frontend and uses the image
+runtime defaults:
 
-- `foodbox-backend`: Spring Boot app, container port 80
-- `foodbox-frontend`: Nginx serving Svelte build, host ports 80/443
-- `./db`: mounted to `/db` in the backend container
-- `/api/*`: proxied by Nginx to the backend service
+```bash
+docker build --tag foodbox-local .
+docker run --rm --env-file .env --publish 8080:8080 \
+  --volume foodbox-local-data:/data foodbox-local
+```
 
-`front/nginx.conf` currently assumes the `foodbox.o-r.kr` domain and Let's Encrypt certificate paths. To test HTTPS locally with Docker, adjust the Nginx config or certificate mounts for your environment.
+Then check the readiness endpoint and menu API:
 
-## API Endpoints
+```bash
+curl --fail http://127.0.0.1:8080/healthz
+curl --fail http://127.0.0.1:8080/api/menu
+```
 
-| Method | Endpoint | Description |
+## Configuration
+
+Do not put credentials in source files, Gradle resources, Docker images,
+commands, issue comments, or GitHub repository variables. The table names the
+variables only; secret values are intentionally omitted.
+
+| Variable | Required | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/menu/today` | Get today's menu |
-| `GET` | `/api/menu` | Get all stored menus |
-| `GET` | `/api/crawl` | Manually crawl and OCR-parse the menu image |
-| `POST` | `/api/upload` | Upload a menu image and OCR-parse it |
-| `GET` | `/api/slack/notify` | Manually send today's Slack notification |
+| `CLOVA_URL` | Yes | Clova OCR invocation endpoint |
+| `CLOVA_SECRET_KEY` | Yes | Clova OCR credential |
+| `SLACK_TOKEN` | Yes | Incoming-webhook path secret, not a bot OAuth token |
+| `SLACK_CHANNEL` | Yes | Slack destination channel |
+| `CRAWL_URL` | No | Eisodosirak menu board URL |
+| `SLACK_URL` | No | Slack webhook base URL |
+| `SLACK_USERNAME` | No | Display name used by the Slack message |
+| `ADMIN_TOKEN` | No | Internal management API credential; an empty value disables those routes |
+| `SERVER_PORT` | No | Application listen port |
+| `DB_FILE_DIR` | No | Directory containing `db.json` and `metadata.json` |
+| `STATIC_DIR` | No | Compiled Svelte asset directory |
+| `TZ` | No | Runtime timezone; production scheduling uses Seoul time |
 
-`/api/crawl` and `/api/slack/notify` change server-side state, but the current implementation uses `GET`.
+Production keeps application configuration in the server-side `.env`. The
+deployment script never replaces this file and restricts its permissions. It
+creates a separate `.deploy.env` containing only deployment metadata needed by
+Compose. `FOODBOX_IMAGE` and `DOMAIN` belong to that generated deployment file,
+not to the application secret store.
 
-## Project Structure
+## HTTP API
 
-```text
-.
-├── src/main/java/shanepark/foodbox
-│   ├── api
-│   │   ├── controller      # REST API
-│   │   ├── domain          # Menu, ApiResponse, DTOs
-│   │   ├── repository      # file-based menu storage
-│   │   └── service         # menu crawl, parse, lookup flow
-│   ├── crawl               # vendor page/image crawling
-│   ├── image
-│   │   ├── domain          # parsed menu and OCR regions
-│   │   └── ocr             # Clova OCR client/parser and margin calculator
-│   └── slack               # Slack schedule, message formatting, sender
-├── src/main/resources
-│   ├── application.yml
-│   └── application-dev.yml
-└── front
-    ├── src                 # Svelte app
-    ├── vite.config.js      # dev API proxy to localhost:8080
-    └── nginx.conf          # production frontend/API proxy
-```
+Public routes:
 
-## How It Works
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/healthz` | Verify that the file store is readable and writable |
+| `GET` | `/api/menu` | Return all menus, newest first |
+| `GET` | `/api/menu/today` | Return today's menu |
 
-1. `MenuService` starts up and checks whether stored menu data is up to date.
-2. If data is missing or stale, `MenuCrawler` downloads the vendor menu image.
-3. The image hash is compared with the previous crawl to avoid duplicate OCR work.
-4. `ImageParserClovaEiso` sends the image to Naver Clova OCR and parses date/menu regions.
-5. Parsed menus are saved by `MenuRepository` in the configured DB directory.
-6. The Svelte app reads `/api/menu` and renders a monthly calendar.
-7. `SlackNotifyService` sends the daily 9 AM notification, with special Wednesday handling.
+Management routes implemented by the application:
 
-## Business Rules
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/crawl` | Download, OCR, and persist the current menu |
+| `POST` | `/api/upload` | Parse one multipart `file` upload, limited to 10 MB |
+| `POST` | `/api/slack/notify` | Send today's notification immediately |
 
-- A menu is valid only when it has at least 3 menu items.
-- Invalid menus are skipped for Slack notifications and are treated like holiday/no-menu cases.
-- Weekends do not send lunch notifications.
-- Wednesdays are special:
-  - first three Wednesdays of a month: Dennis Deli salad day
-  - last Wednesday of a month: eating-out day
-- OCR dates that contain only month and day are resolved to the closest date within the current, previous, or next year window.
+Management routes require `ADMIN_TOKEN` through a bearer authorization header
+or `X-Admin-Token`. Production Caddy returns 404 for them before requests reach
+the application, so possessing the token does not expose them on the public
+internet. Add a separately authenticated operator path before changing that
+edge policy.
 
-## Tests
+Responses retain the `{status,error,data}` envelope and menu fields used by the
+existing frontend. Unlike the legacy Spring advice, error responses now also
+use the corresponding HTTP status. The state-changing crawl and Slack routes
+now require `POST`.
 
-Run all tests:
+## Persistence and scheduling
 
-```bash
-./gradlew test
-```
+- `db.json` keeps the existing Spring/Jackson date representation and remains
+  backward-compatible with the legacy application.
+- `metadata.json` persists the last successfully processed image hash, avoiding
+  duplicate OCR work across restarts.
+- Writes use a unique temporary file, file and directory sync, and atomic
+  replacement. Only one application instance may own the volume.
+- Startup refresh runs after the HTTP server becomes ready and does not block
+  readiness on vendor or Clova availability.
+- Slack notification runs once daily in Seoul time. Startup refresh and daily
+  notification cannot overlap.
 
-Focused test examples:
+## CI/CD
 
-```bash
-./gradlew test --tests MenuRepositoryTest
-./gradlew test --tests ImageMarginCalculatorEisoTest
-./gradlew test --tests ImageParserClovaEisoTest
-./gradlew test --tests SlackNotifyServiceTest
-./gradlew test --tests SlackMessageSenderTest
-```
+- `.github/workflows/ci.yml` tests Go, builds Svelte, and builds the Linux AMD64
+  container for pull requests and development-branch changes.
+- `.github/workflows/deploy.yml` repeats verification on `main`, publishes the
+  application to GHCR, and deploys the exact image digest through the GitHub
+  `production` Environment.
+- `.github/workflows/rollback.yml` is a manually dispatched rollback to the
+  previously successful Go release.
 
-OCR parser tests use sample image/OCR resources under `src/test/resources`.
+The Oracle VM never runs Go, Node, Gradle, or Docker image builds during normal
+deployment. It pulls an immutable digest, backs up the file database, starts the
+stack, and accepts the release only after Compose health checks and the public
+HTTPS health check succeed.
 
-## Development Notes
+## Legacy Spring implementation
 
-### Updating Image Parsing
+The Java/Gradle files and Spring tests are intentionally retained during the
+migration window. They document historical behavior and allow a controlled
+first-cutover rollback. They have known operational and security limitations,
+including server-side builds, a larger JVM runtime, unauthenticated management
+GET routes, secret-bearing ignored development resources in old JARs, and
+secret disclosure in old startup logs.
 
-1. Add or update sample menu images and OCR JSON under `src/test/resources`.
-2. Adjust region detection in `ImageMarginCalculatorEiso`.
-3. Adjust parsing in `ImageParserClovaEiso` or `ParsedMenuEiso`.
-4. Run `./gradlew test --tests ImageParserClovaEisoTest`.
-5. Run `./gradlew clean build`.
-
-### Updating Slack Logic
-
-1. Update `SlackNotifyService` or `NotifyDate`.
-2. Add or update cases in `SlackNotifyServiceTest`.
-3. Run `./gradlew test --tests SlackNotifyServiceTest`.
-
-### Adding a New Vendor
-
-1. Create a vendor-specific `ImageParserClova{Vendor}`.
-2. Create a vendor-specific `ImageMarginCalculator{Vendor}`.
-3. Add image/OCR fixtures under `src/test/resources`.
-4. Update `CRAWL_URL`.
-5. Update `MenuCrawler.getMenuImage()` if the vendor page structure differs.
-6. Add parser tests before deploying.
-
-## Troubleshooting
-
-- Frontend shows no data: confirm the backend is running on `localhost:8080` and `curl http://localhost:8080/api/menu` returns JSON.
-- Frontend API calls fail in dev: check `front/vite.config.js`; the proxy target should match the backend port.
-- Backend starts on port 80: run with `SPRING_PROFILES_ACTIVE=dev` for port 8080.
-- OCR parsing fails: verify `CLOVA_URL` and `CLOVA_SECRET_KEY`, then inspect parser tests and OCR fixtures.
-- Slack notification fails: verify Slack webhook token/channel config and run `GET /api/slack/notify` manually.
-- Docker frontend fails on HTTPS locally: `front/nginx.conf` expects production certificate paths for `foodbox.o-r.kr`.
+Do not use the legacy build as the source of production credentials. After the
+Go cutover and rollback window are complete, remove old JARs, images, logs, and
+ignored development configuration as described in the migration runbook.
