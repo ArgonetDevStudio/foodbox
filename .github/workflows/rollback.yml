@@ -1,0 +1,67 @@
+name: Roll back production
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: foodbox-production
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Restore previous digest
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL || 'https://foodbox.o-r.kr' }}
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/ubuntu/foodbox' }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://foodbox.o-r.kr' }}
+    steps:
+      - name: Configure strict SSH authentication
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${DEPLOY_HOST:?DEPLOY_HOST is required}"
+          : "${DEPLOY_USER:?DEPLOY_USER is required}"
+          : "${DEPLOY_KEY:?DEPLOY_SSH_KEY is required}"
+          : "${DEPLOY_KNOWN_HOSTS:?DEPLOY_KNOWN_HOSTS is required}"
+          DEPLOY_PORT=${DEPLOY_PORT:-22}
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.:-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          [[ "$PUBLIC_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/foodbox_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/foodbox_deploy" "$HOME/.ssh/known_hosts"
+          printf 'DEPLOY_PORT=%s\n' "$DEPLOY_PORT" >> "$GITHUB_ENV"
+
+      - name: Roll back and verify production
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh \
+            -i "$HOME/.ssh/foodbox_deploy" \
+            -p "$DEPLOY_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            "$target" \
+            "FOODBOX_ROOT='$DEPLOY_PATH' bash '$DEPLOY_PATH/scripts/rollback.sh' '$PUBLIC_URL'"

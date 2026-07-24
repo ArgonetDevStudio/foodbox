@@ -1,0 +1,199 @@
+name: Deploy production
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foodbox-production
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/argonetdevstudio/foodbox
+  TZ: Asia/Seoul
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: backend/go.sum
+
+      - name: Test backend
+        working-directory: backend
+        run: go test ./...
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: front
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: front
+        run: npm run build
+
+  publish:
+    name: Publish immutable image
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:main
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=foodbox-amd64
+          cache-to: type=gha,mode=max,scope=foodbox-amd64
+
+  deploy:
+    name: Deploy exact digest
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL || 'https://foodbox.o-r.kr' }}
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/ubuntu/foodbox' }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://foodbox.o-r.kr' }}
+      IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Check out deployment files
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Configure strict SSH authentication
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${DEPLOY_HOST:?DEPLOY_HOST is required}"
+          : "${DEPLOY_USER:?DEPLOY_USER is required}"
+          : "${DEPLOY_KEY:?DEPLOY_SSH_KEY is required}"
+          : "${DEPLOY_KNOWN_HOSTS:?DEPLOY_KNOWN_HOSTS is required}"
+          DEPLOY_PORT=${DEPLOY_PORT:-22}
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.:-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/foodbox_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/foodbox_deploy" "$HOME/.ssh/known_hosts"
+          printf 'DEPLOY_PORT=%s\n' "$DEPLOY_PORT" >> "$GITHUB_ENV"
+
+      - name: Stage deployment files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_options=(
+            -i "$HOME/.ssh/foodbox_deploy"
+            -p "$DEPLOY_PORT"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=10
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+          )
+          scp_options=(
+            -i "$HOME/.ssh/foodbox_deploy"
+            -P "$DEPLOY_PORT"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=10
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+          )
+          ssh "${ssh_options[@]}" "$target" \
+            "mkdir -p '$DEPLOY_PATH/.incoming/deploy' '$DEPLOY_PATH/.incoming/scripts'"
+          scp "${scp_options[@]}" docker-compose.yml \
+            "$target:$DEPLOY_PATH/.incoming/docker-compose.yml"
+          scp "${scp_options[@]}" deploy/Caddyfile \
+            "$target:$DEPLOY_PATH/.incoming/deploy/Caddyfile"
+          scp "${scp_options[@]}" scripts/deploy.sh scripts/rollback.sh \
+            "$target:$DEPLOY_PATH/.incoming/scripts/"
+
+      - name: Deploy and verify production
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image_ref="${IMAGE_NAME}@${IMAGE_DIGEST}"
+          [[ "$image_ref" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
+          [[ "$PUBLIC_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh \
+            -i "$HOME/.ssh/foodbox_deploy" \
+            -p "$DEPLOY_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            "$target" \
+            "FOODBOX_ROOT='$DEPLOY_PATH' bash '$DEPLOY_PATH/.incoming/scripts/deploy.sh' '$image_ref' '$PUBLIC_URL'"
