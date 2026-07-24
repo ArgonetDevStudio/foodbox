@@ -54,32 +54,42 @@ time because the database is file-based and the app owns scheduled Slack jobs.
 
 ## Automated release and rollback
 
-Merging to `main` runs the release verification and image build, then enters
-the GitHub `production` environment before changing the VM. Configure a
-required reviewer on that environment to make deployment wait for explicit
-approval. The VM job is detached from SSH and can be reattached by re-running
-the same workflow run. Do not start a second manual operation while a job
-reports `RUNNING` or `EXIT:21`.
+Every push to `main` starts the deploy workflow. Its release verification must
+pass before it builds and publishes an immutable image. The server job then
+enters the GitHub `production` Environment; configure a required reviewer there
+to require explicit deployment approval. PR approval is separate and is
+enforced only by the repository's branch ruleset.
 
-Every deployment stops and verifies the current stack before taking its final
-database snapshot or starting the Go writer. On an initial installation without
-a previous Go release, a failed Go release is stopped, the complete final
-snapshot and original configuration-existence state are restored, and no
-runtime is started (`exit 12`). For upgrades between Go releases, failure
-restores the exact previous digest and reports `exit 10` only after health, API,
-UI, database, and single-writer checks pass. Valid rows added after the snapshot
-are retained; the snapshot is restored only when database integrity fails. An
-unprovable stop or failed recovery reports `exit 11` and requires inspection
-before another operation.
+The VM job runs detached from SSH. Re-running the same workflow run reattaches
+to the durable job instead of starting the operation again. Do not start a
+second operation while a job reports `RUNNING` or after `EXIT:21`.
 
-The manual rollback workflow is Go-only and swaps the active release with the
-stored previous immutable digest. It refuses to run when a crashed deployment
-or rollback left unresolved transaction state under `.deploy-state`. Resolve
-that state on the VM before retrying; do not delete it merely to bypass the
-safety check. Exit `20` is a preflight rejection, and `21` means a detached job
-lost its definitive result. Do not delete transaction state or start another
-runtime after exit `11` or `21` until the running containers and database have
-been inspected.
+Every deployment snapshots the database before stopping the current stack,
+proves that all starting containers stopped, and takes a final stopped-state
+snapshot before starting the new writer. If no previous successful Go release
+exists, failure stops the target, restores that exact final database snapshot
+and the original configuration-existence state, and remains stopped. If a
+previous Go release exists, failure restores its exact immutable configuration
+and verifies runtime, API, UI, database, and single-writer health. Rows safely
+added after the snapshot are retained; the complete snapshot is restored only
+when database integrity cannot be preserved.
+
+The manual rollback workflow swaps the active release with the stored previous
+immutable Go release. It refuses to run while unresolved deployment or rollback
+transaction state exists under `.deploy-state`; inspect and resolve that state
+rather than deleting it to bypass the guard.
+
+The detached operation reports these final results:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Deployment or rollback completed and passed its verification checks. |
+| `2` | The invocation, durable-job request, or staged bundle is invalid. |
+| `10` | The operation did not complete, but the Go release active at its start was restored and verified. |
+| `11` | Automatic safety or recovery could not be completed or proved; inspect the VM before another operation. |
+| `12` | No previous successful Go release existed; DB/config were restored exactly and the stack remains stopped. |
+| `20` | Preflight or safety checks rejected the operation before changing the active release. |
+| `21` | The detached job lost its definitive result; inspect the VM and durable job state before continuing. |
 
 ## Routing and security
 

@@ -27,8 +27,8 @@ Keep this file short. Use `README.md` for development and API details and
 
 ## Current architecture
 
-- `backend/`: Go 1.26.5 API, scheduler, crawler, OCR, file store, Slack client,
-  and static-file server
+- `backend/`: Go API, scheduler, crawler, OCR, file store, Slack client, and
+  static-file server; automation uses Go 1.26.5 and `go.mod` permits Go 1.25+
 - `front/`: Svelte 5 UI, compiled into the Go container image
 - `deploy/Caddyfile`: public HTTP/HTTPS edge and automatic certificates
 - `docker-compose.yml`: one non-root Go app and one Caddy instance
@@ -106,8 +106,9 @@ results; do not claim checks that were not run.
   `.env`, `.deploy.env`, and Caddy volumes. Never run `docker compose down -v`
   in production.
 - Normal deployment builds nothing on the VM. It pulls an immutable digest,
-  backs up the DB, waits for local and public HTTPS health, and restores the
-  starting release on failure.
+  backs up the DB, and waits for local and public HTTPS health. On failure it
+  restores a verified starting Go release, or restores DB/config and remains
+  stopped when no previous successful Go release exists.
 
 ## Code and commits
 

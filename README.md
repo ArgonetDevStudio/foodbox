@@ -13,7 +13,8 @@ Production runs as two small containers:
 
 ## Requirements
 
-- Go 1.26.5
+- Go 1.26.5 (the toolchain pinned by CI and release workflows; `go.mod`
+  declares Go 1.25.0 as the module minimum)
 - Node.js 24 and npm
 - Docker with Docker Compose v2 for container testing or deployment
 
@@ -168,13 +169,14 @@ state-changing crawl and Slack routes require `POST`.
 
 ## CI/CD
 
-- `.github/workflows/ci.yml` tests Go, builds Svelte, and builds the Linux AMD64
-  container for pull requests and development-branch changes.
-- `.github/workflows/deploy.yml` repeats verification on `main`, publishes the
-  application to GHCR, and deploys the exact image digest through the GitHub
-  `production` Environment.
-- `.github/workflows/rollback.yml` is a manually dispatched rollback to the
-  previously successful Go release.
+- `.github/workflows/ci.yml` tests Go, validates deployment operations, builds
+  Svelte, and builds the Linux AMD64 container for pull requests targeting
+  `dev` or `main`, pushes to either branch, and manual dispatches.
+- `.github/workflows/deploy.yml` starts on every push to `main`. Its own release
+  verification must pass before it builds and publishes the GHCR image, and
+  only the exact published digest is passed to the server deployment job.
+- `.github/workflows/rollback.yml` is a manually dispatched rollback from
+  `main` to the stored previous successful Go release.
 
 The Oracle VM never runs Go, Node, or Docker image builds during normal
 deployment. It pulls an immutable digest, backs up the file database, starts the
@@ -187,11 +189,19 @@ the SSH deployment secrets and optional `DEPLOY_PATH` / `PUBLIC_URL` variables.
 The GHCR package must either be publicly readable or the VM must already be
 logged in with a narrowly scoped read-only package credential.
 
-A push to `main` starts deployment. If the `production` Environment has required
-reviewers, the immutable image is built and published first, then the server
-step waits for approval. The server locks concurrent releases, backs up
-`db.json`, pulls the digest, waits for Compose and public HTTPS health checks,
-and restores the starting release if validation fails.
+A push to `main` starts the deploy workflow whether it came from a merged PR or
+a direct push. PR review and approval are enforced only by the repository's
+branch ruleset; Actions does not impose them. Configure a required reviewer on
+the GitHub `production` Environment to hold the server job for explicit
+approval after verification and image publication. The server locks concurrent
+operations, snapshots the database, pulls immutable images, and accepts a
+release only after runtime, API, UI, database, and single-writer checks pass.
+
+If no previous successful Go release exists, a failed deployment restores the
+exact stopped-state database and the original configuration-existence state,
+then remains stopped. Later deployment failures restore and verify the Go
+release that was active when deployment started. See `deploy/README.md` for the
+operation exit-code contract.
 
 After two successful deployments, the `Roll back production` workflow can be
 manually dispatched from `main` to restore and verify the previously successful
