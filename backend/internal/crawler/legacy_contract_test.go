@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,7 +19,7 @@ func TestLegacyContractDownloadUsesEisoSelectorsCurrentMonthAndRelativeURLs(t *t
 	image := []byte{0xff, 0xd8, 0xff, 0x10, 0x20}
 	var mutex sync.Mutex
 	var requestURIs []string
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	serverURL, httpClient := newCrawlerTLSServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
 			t.Errorf("method = %q, want GET", request.Method)
 		}
@@ -53,9 +52,8 @@ func TestLegacyContractDownloadUsesEisoSelectorsCurrentMonthAndRelativeURLs(t *t
 			http.Error(writer, "unexpected path", http.StatusNotFound)
 		}
 	}))
-	defer server.Close()
 
-	client, err := NewClient(server.URL+"/bbs/board.php?bo_table=basic4", withClock(func() time.Time {
+	client, err := NewClient(serverURL+"/bbs/board.php?bo_table=basic4", WithHTTPClient(httpClient), withClock(func() time.Time {
 		return time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
 	}))
 	if err != nil {
@@ -87,7 +85,7 @@ func TestLegacyContractDownloadUsesEisoSelectorsCurrentMonthAndRelativeURLs(t *t
 }
 
 func TestLegacyContractDownloadFallsBackToFirstAnchorOnlyInsideContent(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	serverURL, httpClient := newCrawlerTLSServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/list":
 			_, _ = io.WriteString(writer, `<div class="bbs-list"><a class="aline" href="/detail">2026년 07월 식단표</a></div>`)
@@ -99,9 +97,8 @@ func TestLegacyContractDownloadFallsBackToFirstAnchorOnlyInsideContent(t *testin
 			http.NotFound(writer, request)
 		}
 	}))
-	defer server.Close()
 
-	client, err := NewClient(server.URL+"/list", withClock(func() time.Time {
+	client, err := NewClient(serverURL+"/list", WithHTTPClient(httpClient), withClock(func() time.Time {
 		return time.Date(2026, time.July, 31, 23, 59, 59, 0, koreaLocation)
 	}))
 	if err != nil {
@@ -150,7 +147,7 @@ func TestLegacyContractDownloadRejectsEveryNon2xxStage(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			serverURL, httpClient := newCrawlerTLSServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				if request.URL.Path == test.failedPath {
 					http.Error(writer, "failure", test.status)
 					return
@@ -164,9 +161,8 @@ func TestLegacyContractDownloadRejectsEveryNon2xxStage(t *testing.T) {
 					_, _ = io.WriteString(writer, "image")
 				}
 			}))
-			defer server.Close()
 
-			client, err := NewClient(server.URL+"/list", withClock(func() time.Time {
+			client, err := NewClient(serverURL+"/list", WithHTTPClient(httpClient), withClock(func() time.Time {
 				return time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
 			}))
 			if err != nil {
@@ -184,7 +180,7 @@ func TestLegacyContractOversizedStreamRemovesTemporaryDownload(t *testing.T) {
 	temporaryDirectory := t.TempDir()
 	t.Setenv("TMPDIR", temporaryDirectory)
 
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	serverURL, httpClient := newCrawlerTLSServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/list":
 			_, _ = io.WriteString(writer, `<div class="bbs-list"><a class="aline" href="/detail">2026년 07월 식단표</a></div>`)
@@ -195,9 +191,9 @@ func TestLegacyContractOversizedStreamRemovesTemporaryDownload(t *testing.T) {
 			_, _ = io.WriteString(writer, "12345")
 		}
 	}))
-	defer server.Close()
 
-	client, err := NewClient(server.URL+"/list",
+	client, err := NewClient(serverURL+"/list",
+		WithHTTPClient(httpClient),
 		withClock(func() time.Time { return time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC) }),
 		WithLimits(1024, 4),
 	)

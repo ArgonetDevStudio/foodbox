@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -94,7 +96,7 @@ func TestLegacyMigrationAcceptanceLifecycle(t *testing.T) {
 
 	var serveChangedImage atomic.Bool
 	var vendorRequests atomic.Int32
-	vendor := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	vendor := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		vendorRequests.Add(1)
 		switch request.URL.Path {
 		case "/board":
@@ -143,7 +145,10 @@ func TestLegacyMigrationAcceptanceLifecycle(t *testing.T) {
 	}))
 	t.Cleanup(slackServer.Close)
 
-	crawlClient, err := crawler.NewClient(vendor.URL + "/board")
+	crawlClient, err := crawler.NewClient(
+		"https://vendor.example.test/board",
+		crawler.WithHTTPClient(acceptanceHTTPSClient(vendor)),
+	)
 	if err != nil {
 		t.Fatalf("create crawler: %v", err)
 	}
@@ -188,7 +193,7 @@ func TestLegacyMigrationAcceptanceLifecycle(t *testing.T) {
 	}
 	if firstClovaRequest.Method != http.MethodPost || firstClovaRequest.Path != "/invoke" ||
 		firstClovaRequest.Secret != "acceptance-clova-secret" || firstClovaRequest.ContentType != "application/json" ||
-		firstClovaRequest.ImageFormat != "jpg" || firstClovaRequest.ImageHash != sha256.Sum256(image) {
+		firstClovaRequest.ImageFormat != "png" || firstClovaRequest.ImageHash != sha256.Sum256(image) {
 		t.Fatalf("unexpected Clova request: %+v", firstClovaRequest)
 	}
 
@@ -265,6 +270,17 @@ func TestLegacyMigrationAcceptanceLifecycle(t *testing.T) {
 	}
 	response = acceptanceRequest(t, restarted.URL, http.MethodGet, "/healthz", "")
 	acceptanceAssertResponse(t, response, http.StatusOK, `{"status":200,"error":null,"data":{"ready":true}}`+"\n")
+}
+
+func acceptanceHTTPSClient(server *httptest.Server) *http.Client {
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}
+	transport.TLSClientConfig = &tls.Config{ //nolint:gosec -- isolated httptest server with a mapped public hostname
+		InsecureSkipVerify: true,
+	}
+	return &http.Client{Transport: transport, Timeout: 2 * time.Second}
 }
 
 func acceptanceStartApplication(
