@@ -428,8 +428,8 @@ func allowMethods(methods []string, next http.HandlerFunc) http.HandlerFunc {
 		writeJSON(response, http.StatusMethodNotAllowed, envelope{
 			Status: http.StatusMethodNotAllowed,
 			Error: &errorResponse{
-				ErrorCode: "METHOD_NOT_ALLOWED",
-				Message:   "method not allowed",
+				ErrorCode: "HttpRequestMethodNotSupportedException",
+				Message:   fmt.Sprintf("Request method '%s' is not supported", request.Method),
 			},
 		})
 	}

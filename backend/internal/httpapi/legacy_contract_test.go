@@ -128,18 +128,24 @@ func TestLegacyContractTodayWhenMenuIsMissing(t *testing.T) {
 func TestLegacyContractPublicMenuMethodsAndContentType(t *testing.T) {
 	handler := newTestHandler(t, Config{}, &fakeMenuService{}, &fakeNotificationService{})
 
-	for _, path := range []string{"/api/menu", "/api/menu/today"} {
-		t.Run(path, func(t *testing.T) {
-			response := performContractRequest(handler, http.MethodPost, path, "")
+	for _, test := range []struct {
+		path   string
+		method string
+	}{
+		{path: "/api/menu", method: http.MethodPost},
+		{path: "/api/menu/today", method: http.MethodPut},
+	} {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := performContractRequest(handler, test.method, test.path, "")
 			assertContractHTTP(t, response, http.StatusMethodNotAllowed)
 			if got := response.Header().Get("Allow"); got != http.MethodGet {
 				t.Fatalf("Allow = %q, want %q", got, http.MethodGet)
 			}
-			assertJSONEqual(t, response.Body.Bytes(), []byte(`{
-				"status":405,
-				"error":{"errorCode":"METHOD_NOT_ALLOWED","message":"method not allowed"},
-				"data":null
-			}`))
+			wantBody := `{"status":405,"error":{"errorCode":"HttpRequestMethodNotSupportedException","message":"Request method '` +
+				test.method + `' is not supported"},"data":null}` + "\n"
+			if got := response.Body.String(); got != wantBody {
+				t.Fatalf("body = %q, want exact Spring-compatible envelope %q", got, wantBody)
+			}
 		})
 	}
 }
@@ -154,7 +160,7 @@ func TestIntentionalAdminContractChangesAreProtected(t *testing.T) {
 				if got := response.Header().Get("Allow"); got != http.MethodPost {
 					t.Fatalf("Allow = %q, want POST", got)
 				}
-				assertErrorEnvelope(t, response.Body.Bytes(), http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED")
+				assertErrorEnvelope(t, response.Body.Bytes(), http.StatusMethodNotAllowed, "HttpRequestMethodNotSupportedException")
 			})
 		}
 	})

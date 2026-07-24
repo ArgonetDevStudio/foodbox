@@ -218,7 +218,7 @@ func TestLegacyAdminGETMethodsReturn405(t *testing.T) {
 			if response.Header().Get("Allow") != http.MethodPost {
 				t.Fatalf("Allow = %q, want POST", response.Header().Get("Allow"))
 			}
-			assertErrorCode(t, response.Body.Bytes(), "METHOD_NOT_ALLOWED")
+			assertErrorCode(t, response.Body.Bytes(), "HttpRequestMethodNotSupportedException")
 		})
 	}
 }
