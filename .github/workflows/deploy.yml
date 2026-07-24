@@ -37,6 +37,32 @@ jobs:
         working-directory: backend
         run: go test ./...
 
+      - name: Test backend with race detector
+        working-directory: backend
+        run: go test -race ./...
+
+      - name: Vet backend
+        working-directory: backend
+        run: go vet ./...
+
+      - name: Check backend vulnerabilities
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          govulncheck ./...
+
+      - name: Verify deployment operations
+        run: |
+          bash -n scripts/deploy.sh scripts/rollback.sh scripts/job.sh
+          PYTHONPYCACHEPREFIX="$RUNNER_TEMP/foodbox-pycache" \
+            python3 -m py_compile scripts/db_snapshot.py scripts/db_restore.py scripts/db_validate.py \
+              scripts/test_operations.py
+          python3 scripts/test_operations.py -v
+
+      - name: Build backend
+        working-directory: backend
+        run: go build ./cmd/foodbox
+
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -100,7 +126,7 @@ jobs:
     name: Deploy exact digest
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     permissions:
       contents: read
     environment:
@@ -134,12 +160,18 @@ jobs:
           [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]
           [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
           [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          [[ "$DEPLOY_PATH" != *//* && "$DEPLOY_PATH" != */./* && "$DEPLOY_PATH" != */../* ]]
+          [[ "$DEPLOY_PATH" != */. && "$DEPLOY_PATH" != */.. ]]
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
           printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/foodbox_deploy"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/foodbox_deploy" "$HOME/.ssh/known_hosts"
-          printf 'DEPLOY_PORT=%s\n' "$DEPLOY_PORT" >> "$GITHUB_ENV"
+          {
+            printf 'DEPLOY_PORT=%s\n' "$DEPLOY_PORT"
+            printf 'DEPLOY_JOB_ID=deploy-%s\n' "$GITHUB_RUN_ID"
+            printf 'DEPLOY_STAGE_ID=deploy-%s-attempt-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_ENV"
 
       - name: Stage deployment files
         shell: bash
@@ -168,14 +200,22 @@ jobs:
             -o ServerAliveInterval=15
             -o ServerAliveCountMax=3
           )
+          remote_stage="$DEPLOY_PATH/.incoming/$DEPLOY_STAGE_ID"
+          remote_upload="$remote_stage.upload"
+          # shellcheck disable=SC2029 # Values expand locally after strict validation.
           ssh "${ssh_options[@]}" "$target" \
-            "mkdir -p '$DEPLOY_PATH/.incoming/deploy' '$DEPLOY_PATH/.incoming/scripts'"
+            "test ! -e '$remote_stage' && test ! -e '$remote_upload' && mkdir -p '$remote_upload/deploy' '$remote_upload/scripts'"
           scp "${scp_options[@]}" docker-compose.yml \
-            "$target:$DEPLOY_PATH/.incoming/docker-compose.yml"
+            "$target:$remote_upload/docker-compose.yml"
           scp "${scp_options[@]}" deploy/Caddyfile \
-            "$target:$DEPLOY_PATH/.incoming/deploy/Caddyfile"
-          scp "${scp_options[@]}" scripts/deploy.sh scripts/rollback.sh \
-            "$target:$DEPLOY_PATH/.incoming/scripts/"
+            "$target:$remote_upload/deploy/Caddyfile"
+          scp "${scp_options[@]}" scripts/deploy.sh scripts/rollback.sh scripts/job.sh \
+            scripts/db_snapshot.py scripts/db_restore.py scripts/db_validate.py \
+            "$target:$remote_upload/scripts/"
+
+          # shellcheck disable=SC2029 # Values expand locally after strict validation.
+          ssh "${ssh_options[@]}" "$target" \
+            "test -f '$remote_upload/docker-compose.yml' && test -f '$remote_upload/deploy/Caddyfile' && test -f '$remote_upload/scripts/deploy.sh' && test -f '$remote_upload/scripts/rollback.sh' && test -f '$remote_upload/scripts/job.sh' && test -f '$remote_upload/scripts/db_snapshot.py' && test -f '$remote_upload/scripts/db_restore.py' && test -f '$remote_upload/scripts/db_validate.py' && mv '$remote_upload' '$remote_stage'"
 
       - name: Deploy and verify production
         shell: bash
@@ -183,9 +223,10 @@ jobs:
           set -Eeuo pipefail
           image_ref="${IMAGE_NAME}@${IMAGE_DIGEST}"
           [[ "$image_ref" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
-          [[ "$PUBLIC_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]
+          [[ "$PUBLIC_URL" =~ ^https://[A-Za-z0-9.-]+/?$ ]]
           target="${DEPLOY_USER}@${DEPLOY_HOST}"
-          ssh \
+          remote_stage="$DEPLOY_PATH/.incoming/$DEPLOY_STAGE_ID"
+          ssh_options=(
             -i "$HOME/.ssh/foodbox_deploy" \
             -p "$DEPLOY_PORT" \
             -o BatchMode=yes \
@@ -195,5 +236,104 @@ jobs:
             -o ConnectTimeout=10 \
             -o ServerAliveInterval=15 \
             -o ServerAliveCountMax=3 \
-            "$target" \
-            "FOODBOX_ROOT='$DEPLOY_PATH' bash '$DEPLOY_PATH/.incoming/scripts/deploy.sh' '$image_ref' '$PUBLIC_URL'"
+          )
+          # shellcheck disable=SC2029 # Values expand locally after strict validation.
+          ssh "${ssh_options[@]}" "$target" \
+            "FOODBOX_ROOT='$DEPLOY_PATH' bash '$remote_stage/scripts/job.sh' start '$DEPLOY_JOB_ID' deploy '$image_ref' '$PUBLIC_URL' '$remote_stage'"
+
+          deadline=$((SECONDS + 1800))
+          deployment_status=
+          while (( SECONDS < deadline )); do
+            set +e
+            # shellcheck disable=SC2029 # Values expand locally after strict validation.
+            remote_status=$(ssh "${ssh_options[@]}" "$target" \
+              "FOODBOX_ROOT='$DEPLOY_PATH' bash '$DEPLOY_PATH/.deploy-state/jobs/$DEPLOY_JOB_ID/job.sh' status '$DEPLOY_JOB_ID'" 2>/dev/null)
+            poll_status=$?
+            set -e
+            if [[ $poll_status != 0 ]]; then
+              echo "Remote status is temporarily unavailable; retrying."
+              sleep 10
+              continue
+            fi
+            if [[ $remote_status == RUNNING ]]; then
+              echo "Remote deployment job $DEPLOY_JOB_ID is still running."
+              sleep 10
+              continue
+            fi
+            if [[ $remote_status =~ ^EXIT:([0-9]+)$ ]]; then
+              deployment_status=${BASH_REMATCH[1]}
+              break
+            fi
+            echo "Unexpected remote status: $remote_status" >&2
+            sleep 10
+          done
+
+          set +e
+          # shellcheck disable=SC2029 # Values expand locally after strict validation.
+          ssh "${ssh_options[@]}" "$target" \
+            "FOODBOX_ROOT='$DEPLOY_PATH' bash '$DEPLOY_PATH/.deploy-state/jobs/$DEPLOY_JOB_ID/job.sh' log '$DEPLOY_JOB_ID'"
+          set -e
+          if [[ -z $deployment_status ]]; then
+            echo "::error title=Production deployment still running::Remote job $DEPLOY_JOB_ID did not finish within the polling window. Re-run this workflow to reattach; do not start a manual deployment."
+            exit 1
+          fi
+          if [[ $deployment_status == 11 ]]; then
+            echo "::error title=Production recovery failed::The deployment and automatic recovery both failed. Manual server intervention is required."
+            exit "$deployment_status"
+          fi
+          if [[ $deployment_status == 12 ]]; then
+            echo "::error title=First cutover aborted safely::The old writer and failed Go release are stopped, the complete database snapshot and original configuration were restored, and no runtime was restarted. Fix the reported cause and retry."
+            exit "$deployment_status"
+          fi
+          if [[ $deployment_status == 10 ]]; then
+            echo "::error title=Production deployment rolled back::The new release failed health checks; the previous release was restored and verified."
+            exit "$deployment_status"
+          fi
+          if [[ $deployment_status == 20 ]]; then
+            echo "::error title=Production preflight failed::The active release was not changed. Inspect remote job $DEPLOY_JOB_ID before retrying."
+            exit "$deployment_status"
+          fi
+          if [[ $deployment_status == 21 ]]; then
+            echo "::error title=Deployment job state lost::The durable job did not record a definitive result. Inspect production before starting another deployment."
+            exit "$deployment_status"
+          fi
+          if [[ $deployment_status != 0 ]]; then
+            echo "::error title=Production deployment status unknown::Deployment exited with status $deployment_status. Check the server before retrying."
+            exit "$deployment_status"
+          fi
+
+      - name: Verify production from the Actions runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          probe() {
+            local path=$1
+            local contract=$2
+            local body="$RUNNER_TEMP/foodbox-probe"
+            local status
+            status=$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+              --connect-timeout 5 --max-time 15 "${PUBLIC_URL%/}$path")
+            [[ "$status" == 200 ]]
+            if [[ $contract == ui ]]; then
+              grep -Fq '<div id="app">' "$body"
+              return
+            fi
+            python3 - "$contract" "$body" <<'PY'
+          import json
+          import sys
+          contract, path = sys.argv[1:]
+          with open(path, encoding="utf-8") as response:
+              value = json.load(response)
+          if not isinstance(value, dict) or set(value) != {"status", "error", "data"}:
+              raise SystemExit(1)
+          if value["status"] != 200 or value["error"] is not None:
+              raise SystemExit(1)
+          if contract == "health" and value["data"] != {"ready": True}:
+              raise SystemExit(1)
+          if contract == "menu" and not isinstance(value["data"], list):
+              raise SystemExit(1)
+          PY
+          }
+          probe /healthz health
+          probe /api/menu menu
+          probe / ui

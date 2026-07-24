@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - dev
+      - main
   workflow_dispatch:
 
 permissions:
@@ -39,6 +40,32 @@ jobs:
       - name: Test backend
         working-directory: backend
         run: go test ./...
+
+      - name: Test backend with race detector
+        working-directory: backend
+        run: go test -race ./...
+
+      - name: Vet backend
+        working-directory: backend
+        run: go vet ./...
+
+      - name: Check backend vulnerabilities
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          govulncheck ./...
+
+      - name: Verify deployment operations
+        run: |
+          bash -n scripts/deploy.sh scripts/rollback.sh scripts/job.sh
+          PYTHONPYCACHEPREFIX="$RUNNER_TEMP/foodbox-pycache" \
+            python3 -m py_compile scripts/db_snapshot.py scripts/db_restore.py scripts/db_validate.py \
+              scripts/test_operations.py
+          python3 scripts/test_operations.py -v
+
+      - name: Build backend
+        working-directory: backend
+        run: go build ./cmd/foodbox
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
