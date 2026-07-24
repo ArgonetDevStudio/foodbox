@@ -9,6 +9,12 @@ job_id=${2:-}
 foodbox_root=${FOODBOX_ROOT:-"$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"}
 jobs_dir="$foodbox_root/.deploy-state/jobs"
 
+if [[ ! $foodbox_root =~ ^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$ ]] || \
+  [[ $(realpath -m -- "$foodbox_root") != "$foodbox_root" ]]; then
+  echo "FOODBOX_ROOT must be a canonical absolute path with at least two components." >&2
+  exit 2
+fi
+
 if [[ ! $job_id =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   echo "The deployment job ID is invalid." >&2
   exit 2

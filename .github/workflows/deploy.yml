@@ -159,9 +159,11 @@ jobs:
           [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.:-]+$ ]]
           [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]
           [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
-          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
-          [[ "$DEPLOY_PATH" != *//* && "$DEPLOY_PATH" != */./* && "$DEPLOY_PATH" != */../* ]]
-          [[ "$DEPLOY_PATH" != */. && "$DEPLOY_PATH" != */.. ]]
+          if [[ ! $DEPLOY_PATH =~ ^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$ ]] || \
+            [[ $(realpath -m -- "$DEPLOY_PATH") != "$DEPLOY_PATH" ]]; then
+            echo "DEPLOY_PATH must be a canonical absolute path with at least two components." >&2
+            exit 2
+          fi
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
           printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/foodbox_deploy"

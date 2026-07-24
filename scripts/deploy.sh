@@ -32,8 +32,9 @@ if [[ ! $public_url =~ ^https://([A-Za-z0-9.-]+)/?$ ]]; then
 fi
 domain=${BASH_REMATCH[1]}
 
-if [[ $foodbox_root != /* ]] || [[ $(realpath -m "$foodbox_root") != "$foodbox_root" ]]; then
-  echo "FOODBOX_ROOT must be an absolute canonical path." >&2
+if [[ ! $foodbox_root =~ ^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$ ]] || \
+  [[ $(realpath -m -- "$foodbox_root") != "$foodbox_root" ]]; then
+  echo "FOODBOX_ROOT must be a canonical absolute path with at least two components." >&2
   exit 2
 fi
 

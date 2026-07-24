@@ -162,6 +162,34 @@ class OperationTests(unittest.TestCase):
             env=self._environment(**flags), text=True, capture_output=True, timeout=30,
         )
 
+    def _run_operation_with_root(self, script, root):
+        environment = self._environment()
+        environment["FOODBOX_ROOT"] = root
+        arguments = ["bash", str(REPOSITORY / "scripts" / script)]
+        if script == "deploy.sh":
+            arguments.extend([IMAGE, PUBLIC_URL, str(self.root / ".incoming" / "test")])
+        elif script == "rollback.sh":
+            arguments.append(PUBLIC_URL)
+        else:
+            arguments.extend(["status", "path-validation-test"])
+        return subprocess.run(
+            arguments, env=environment, text=True, capture_output=True, timeout=30,
+        )
+
+    def _root_snapshot(self):
+        snapshot = []
+        for path in sorted(self.root.rglob("*")):
+            relative = str(path.relative_to(self.root))
+            mode = path.lstat().st_mode
+            if path.is_symlink():
+                contents = os.readlink(path)
+            elif path.is_file():
+                contents = path.read_bytes()
+            else:
+                contents = None
+            snapshot.append((relative, mode, contents))
+        return snapshot
+
     def _configure_go_release(self):
         old_image = "ghcr.io/argonetdevstudio/foodbox@sha256:" + "c" * 64
         shutil.copy2(REPOSITORY / "docker-compose.yml", self.root / "docker-compose.yml")
@@ -192,6 +220,54 @@ class OperationTests(unittest.TestCase):
             ["bash", str(self.root / "scripts" / "rollback.sh"), PUBLIC_URL],
             env=self._environment(**flags), text=True, capture_output=True, timeout=30,
         )
+
+    def test_unsafe_deployment_roots_fail_before_filesystem_or_docker_changes(self):
+        unsafe_roots = (
+            "/",
+            "/srv",
+            str(self.root.parent / "safe" / ".." / "foodbox"),
+            str(self.root) + "\n/etc",
+            str(self.root) + "//nested",
+        )
+        expected_error = (
+            "FOODBOX_ROOT must be a canonical absolute path with at least two components."
+        )
+
+        for script in ("deploy.sh", "rollback.sh", "job.sh"):
+            for unsafe_root in unsafe_roots:
+                with self.subTest(script=script, root=repr(unsafe_root)):
+                    before = self._root_snapshot()
+                    result = self._run_operation_with_root(script, unsafe_root)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn(expected_error, result.stderr)
+                    self.assertEqual(self._root_snapshot(), before)
+                    self.assertFalse(self.log.exists())
+
+    def test_canonical_multicomponent_deployment_root_passes_path_validation(self):
+        result = self._run_deploy()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("FOODBOX_ROOT must be", result.stderr)
+
+        before = self._root_snapshot()
+        result = self._run_operation_with_root("job.sh", str(self.root))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), "UNKNOWN")
+        self.assertNotIn("FOODBOX_ROOT must be", result.stderr)
+        self.assertEqual(self._root_snapshot(), before)
+
+    def test_workflows_validate_deployment_root_before_filesystem_setup(self):
+        path_guard = "if [[ ! $DEPLOY_PATH =~ ^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$ ]]"
+        canonical_guard = '[[ $(realpath -m -- "$DEPLOY_PATH") != "$DEPLOY_PATH" ]]'
+
+        for workflow in ("deploy.yml", "rollback.yml"):
+            with self.subTest(workflow=workflow):
+                contents = (REPOSITORY / ".github" / "workflows" / workflow).read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/ubuntu/foodbox' }}", contents)
+                self.assertIn(path_guard, contents)
+                self.assertIn(canonical_guard, contents)
+                self.assertLess(contents.index(path_guard), contents.index('mkdir -p "$HOME/.ssh"'))
 
     def test_first_cutover_stops_writer_after_snapshot_and_succeeds(self):
         result = self._run_deploy()
