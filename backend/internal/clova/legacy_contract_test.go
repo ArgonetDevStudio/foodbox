@@ -68,6 +68,60 @@ func TestLegacyContractRecognizeSendsExactV1HTTPExchange(t *testing.T) {
 	}
 }
 
+func TestLegacyContractRecognizeAlwaysLabelsSupportedImagesAsPNG(t *testing.T) {
+	fixedTime := time.UnixMilli(1_784_937_600_123)
+	tests := []struct {
+		name     string
+		image    []byte
+		wantBody string
+	}{
+		{
+			name:     "JPEG bytes retain legacy PNG label",
+			image:    []byte{0xff, 0xd8, 0xff, 0x00, 0x11},
+			wantBody: `{"images":[{"format":"png","name":"menu","data":"/9j/ABE="}],"lang":"ko","requestId":"string","resultType":"string","timestamp":1784937600123,"version":"V1"}`,
+		},
+		{
+			name:     "PNG bytes retain PNG label",
+			image:    []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0xff},
+			wantBody: `{"images":[{"format":"png","name":"menu","data":"iVBORw0KGgoA/w=="}],"lang":"ko","requestId":"string","resultType":"string","timestamp":1784937600123,"version":"V1"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var gotBody []byte
+			transport := legacyContractClovaTransport(func(request *http.Request) (*http.Response, error) {
+				var err error
+				gotBody, err = io.ReadAll(request.Body)
+				if err != nil {
+					return nil, err
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"images":[]}`)),
+					Header:     make(http.Header),
+				}, nil
+			})
+			client, err := NewClient(
+				"https://clova.example.test/ocr",
+				"secret",
+				WithHTTPClient(transport),
+				withClock(func() time.Time { return fixedTime }),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, _, err := client.Recognize(context.Background(), test.image); err != nil {
+				t.Fatal(err)
+			}
+			if string(gotBody) != test.wantBody {
+				t.Fatalf("request body = %s\nwant = %s", gotBody, test.wantBody)
+			}
+		})
+	}
+}
+
 func TestLegacyContractRecognizeImageAndResponseLimitsAreInclusive(t *testing.T) {
 	image := []byte{0xff, 0xd8, 0xff, 0x01}
 	responseBody := []byte(`{}`)

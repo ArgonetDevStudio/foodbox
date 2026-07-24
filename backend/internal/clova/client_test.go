@@ -36,7 +36,7 @@ func TestRecognizeSendsV1RequestAndReturnsTypedAndRawResponse(t *testing.T) {
 		if request.Version != "V1" || request.Lang != "ko" || request.Timestamp != fixedTime.UnixMilli() {
 			t.Errorf("unexpected request metadata: %+v", request)
 		}
-		if len(request.Images) != 1 || request.Images[0].Format != "jpg" || request.Images[0].Data != base64.StdEncoding.EncodeToString(image) {
+		if len(request.Images) != 1 || request.Images[0].Format != "png" || request.Images[0].Data != base64.StdEncoding.EncodeToString(image) {
 			t.Errorf("unexpected image: %+v", request.Images)
 		}
 		_, _ = io.WriteString(w, responseJSON)

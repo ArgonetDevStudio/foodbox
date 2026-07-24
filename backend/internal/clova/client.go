@@ -160,14 +160,13 @@ func (c *Client) Recognize(ctx context.Context, image []byte) (*Response, []byte
 	if int64(len(image)) > c.maxImageSize {
 		return nil, nil, fmt.Errorf("clova image exceeds %d bytes", c.maxImageSize)
 	}
-	format, err := imageFormat(image)
-	if err != nil {
+	if err := validateImage(image); err != nil {
 		return nil, nil, err
 	}
 
 	payload := requestBody{
 		Images: []requestImage{{
-			Format: format,
+			Format: "png",
 			Name:   "menu",
 			Data:   base64.StdEncoding.EncodeToString(image),
 		}},
@@ -216,14 +215,14 @@ func (c *Client) Recognize(ctx context.Context, image []byte) (*Response, []byte
 	return &result, raw, nil
 }
 
-func imageFormat(image []byte) (string, error) {
+func validateImage(image []byte) error {
 	if len(image) >= 8 && bytes.Equal(image[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
-		return "png", nil
+		return nil
 	}
 	if len(image) >= 3 && image[0] == 0xff && image[1] == 0xd8 && image[2] == 0xff {
-		return "jpg", nil
+		return nil
 	}
-	return "", errors.New("clova only supports JPEG and PNG images")
+	return errors.New("clova only supports JPEG and PNG images")
 }
 
 func readLimited(reader io.Reader, max int64) ([]byte, error) {
