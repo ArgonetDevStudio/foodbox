@@ -47,6 +47,34 @@ process_is_our_job() {
   tr '\0' '\n' <"/proc/$process_id/cmdline" | grep -Fxq "$job_id"
 }
 
+validate_staged_deploy_dir() {
+  local staged_dir=$1
+  local canonical_stage
+  canonical_stage=$(realpath -m "$staged_dir") || return 1
+  [[ $staged_dir == "$canonical_stage" ]] &&
+    [[ $(dirname "$canonical_stage") == "$foodbox_root/.incoming" ]] &&
+    [[ $(basename "$canonical_stage") =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] &&
+    [[ -d $staged_dir/deploy && ! -L $staged_dir/deploy ]] &&
+    [[ $(realpath -m "$staged_dir/deploy") == "$staged_dir/deploy" ]] &&
+    [[ -d $staged_dir/scripts && ! -L $staged_dir/scripts ]] &&
+    [[ $(realpath -m "$staged_dir/scripts") == "$staged_dir/scripts" ]]
+}
+
+cleanup_staged_deploy_dir() {
+  local staged_dir=$1
+  validate_staged_deploy_dir "$staged_dir" || return 1
+  rm -f \
+    "$staged_dir/docker-compose.yml" \
+    "$staged_dir/deploy/Caddyfile" \
+    "$staged_dir/scripts/deploy.sh" \
+    "$staged_dir/scripts/rollback.sh" \
+    "$staged_dir/scripts/job.sh" \
+    "$staged_dir/scripts/db_snapshot.py" \
+    "$staged_dir/scripts/db_restore.py" \
+    "$staged_dir/scripts/db_validate.py" || return 1
+  rmdir "$staged_dir/deploy" "$staged_dir/scripts" "$staged_dir"
+}
+
 launch_job() {
   local job_pid
   local temporary_pid
@@ -101,7 +129,7 @@ case "$command_name" in
         staged_dir=${3:-}
         if [[ ! $image_ref =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] ||
           [[ ! $public_url =~ ^https://[A-Za-z0-9.-]+/?$ ]] ||
-          [[ $staged_dir != "$foodbox_root"/.incoming/* ]]; then
+          ! validate_staged_deploy_dir "$staged_dir"; then
           rm -rf "$temporary_dir"
           echo "The deployment job arguments are invalid." >&2
           exit 2
@@ -109,7 +137,7 @@ case "$command_name" in
         for relative_path in \
           docker-compose.yml deploy/Caddyfile scripts/deploy.sh scripts/rollback.sh scripts/job.sh \
           scripts/db_snapshot.py scripts/db_restore.py scripts/db_validate.py; do
-          if [[ ! -f $staged_dir/$relative_path ]]; then
+          if [[ ! -f $staged_dir/$relative_path || -L $staged_dir/$relative_path ]]; then
             rm -rf "$temporary_dir"
             echo "The staged deployment bundle is incomplete." >&2
             exit 2
@@ -173,9 +201,18 @@ case "$command_name" in
         echo "Job ID $job_id already belongs to a different request." >&2
         exit 2
       fi
+      if [[ $operation == deploy ]] && ! cleanup_staged_deploy_dir "$staged_dir"; then
+        echo "The duplicate operation-owned staging directory could not be cleared safely." >&2
+        exit 11
+      fi
       echo "Deployment job $job_id already exists; reattaching."
       launch_job
       exit 0
+    fi
+
+    if [[ $operation == deploy ]] && ! cleanup_staged_deploy_dir "$staged_dir"; then
+      echo "The operation-owned staging directory could not be cleared safely." >&2
+      exit 11
     fi
 
     launch_job
@@ -185,7 +222,7 @@ case "$command_name" in
     operation=$(<"$job_dir/operation")
     result=2
     # Invoked by the EXIT trap below.
-    # shellcheck disable=SC2329
+    # shellcheck disable=SC2317,SC2329
     finish_job() {
       local shell_status=$?
       if [[ ! -f $status_file ]]; then

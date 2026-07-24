@@ -4,16 +4,32 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 
 
-ALLOWED_FILES = {"db.json", "db.backup.json", "metadata.json"}
+def safe_filename(name):
+    return isinstance(name, str) and name not in {"", ".", ".."} and \
+        os.path.basename(name) == name and len(os.fsencode(name)) <= 255 and \
+        all(character.isprintable() and character not in "\\\r\n" for character in name)
+
+
+def regular_file_details(path):
+    details = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+        raise RuntimeError(f"unsafe regular file: {os.path.basename(path)}")
+    return details
 
 
 def digest(path):
     value = hashlib.sha256()
-    with open(path, "rb") as stream:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    details = os.fstat(descriptor)
+    if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+        os.close(descriptor)
+        raise RuntimeError(f"unsafe regular file: {os.path.basename(path)}")
+    with os.fdopen(descriptor, "rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(chunk)
     return value.hexdigest()
@@ -47,13 +63,13 @@ def restore(snapshot, destination, backups):
         if not isinstance(item, dict) or set(item) != {"name", "sha256", "bytes", "uid", "gid", "mode"}:
             raise RuntimeError("snapshot manifest item is invalid")
         name = item["name"]
-        if name not in ALLOWED_FILES or name in expected:
+        if not safe_filename(name) or name in expected:
             raise RuntimeError("snapshot manifest filename is invalid")
         if not isinstance(item["sha256"], str) or len(item["sha256"]) != 64 or \
                 any(character not in "0123456789abcdef" for character in item["sha256"]):
             raise RuntimeError("snapshot manifest checksum is invalid")
         if any(type(item[field]) is not int or item[field] < 0
-               for field in ("bytes", "uid", "gid", "mode")):
+               for field in ("bytes", "uid", "gid", "mode")) or item["mode"] > 0o7777:
             raise RuntimeError("snapshot manifest file metadata is invalid")
         expected[name] = item
     if "db.json" not in expected:
@@ -62,7 +78,10 @@ def restore(snapshot, destination, backups):
     snapshot_data = os.path.join(snapshot, "data")
     actual = {}
     for entry in os.scandir(snapshot_data):
-        if not entry.is_file(follow_symlinks=False):
+        if not safe_filename(entry.name):
+            raise RuntimeError("snapshot contains an unsafe filename")
+        details = entry.stat(follow_symlinks=False)
+        if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
             raise RuntimeError("snapshot contains an unsafe entry")
         actual[entry.name] = entry.path
     if set(actual) != set(expected):
@@ -74,9 +93,11 @@ def restore(snapshot, destination, backups):
 
     current = {}
     for entry in os.scandir(destination):
-        if not entry.is_file(follow_symlinks=False) and not entry.is_symlink():
-            raise RuntimeError(f"live database contains unsafe entry: {entry.name}")
-        current[entry.name] = (entry.path, entry.is_symlink())
+        if not safe_filename(entry.name):
+            raise RuntimeError("live database contains an unsafe filename")
+        details = entry.stat(follow_symlinks=False)
+        safe_to_copy = stat.S_ISREG(details.st_mode) and details.st_nlink == 1
+        current[entry.name] = (entry.path, safe_to_copy)
 
     prepared = {}
     try:
@@ -92,9 +113,9 @@ def restore(snapshot, destination, backups):
 
         timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         quarantine = tempfile.mkdtemp(prefix=f"rejected-db-{timestamp}.", dir=backups)
-        for name, (path, is_symlink) in current.items():
+        for name, (path, safe_to_copy) in current.items():
             target = os.path.join(quarantine, name)
-            if name in expected and not is_symlink:
+            if name in expected and safe_to_copy:
                 descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
                 with os.fdopen(descriptor, "rb") as reader, open(target, "xb") as writer:
                     shutil.copyfileobj(reader, writer)
@@ -116,7 +137,9 @@ def restore(snapshot, destination, backups):
         if restored != sorted(expected):
             raise RuntimeError("restored database file set differs from snapshot")
         for name, item in expected.items():
-            if digest(os.path.join(destination, name)) != item["sha256"]:
+            path = os.path.join(destination, name)
+            details = regular_file_details(path)
+            if details.st_size != item["bytes"] or digest(path) != item["sha256"]:
                 raise RuntimeError("restored database checksum differs from snapshot")
     finally:
         for path in prepared.values():

@@ -10,13 +10,24 @@ import tempfile
 import time
 
 
+TRANSIENT_PREFIXES = (".db.json.tmp-", ".metadata.json.tmp-", ".foodbox-writable-check-")
+
+
+def safe_filename(name):
+    return isinstance(name, str) and name not in {"", ".", ".."} and \
+        os.path.basename(name) == name and len(os.fsencode(name)) <= 255 and \
+        all(character.isprintable() and character not in "\\\r\n" for character in name)
+
+
 def regular_files(source):
     entries = sorted(os.scandir(source), key=lambda entry: entry.name)
-    transient_prefixes = (".db.json.tmp-", ".metadata.json.tmp-", ".foodbox-writable-check-")
     persistent = []
     for entry in entries:
-        if entry.name.startswith(transient_prefixes):
-            if not entry.is_file(follow_symlinks=False):
+        if not safe_filename(entry.name):
+            raise RuntimeError("database directory contains an unsafe filename")
+        if entry.name.startswith(TRANSIENT_PREFIXES):
+            details = entry.stat(follow_symlinks=False)
+            if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
                 raise RuntimeError(f"unsafe database entry: {entry.name}")
             continue
         persistent.append(entry)
@@ -24,19 +35,22 @@ def regular_files(source):
     if not entries:
         raise RuntimeError("database directory is empty")
     for entry in entries:
-        if not entry.is_file(follow_symlinks=False):
+        details = entry.stat(follow_symlinks=False)
+        if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
             raise RuntimeError(f"unsafe database entry: {entry.name}")
     if "db.json" not in {entry.name for entry in entries}:
         raise RuntimeError("db.json is missing")
-    allowed = {"db.json", "db.backup.json", "metadata.json"}
-    if any(entry.name not in allowed for entry in entries):
-        raise RuntimeError("database directory contains an unexpected file")
     return entries
 
 
 def digest(path):
     value = hashlib.sha256()
-    with open(path, "rb") as stream:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    details = os.fstat(descriptor)
+    if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+        os.close(descriptor)
+        raise RuntimeError(f"unsafe database entry: {os.path.basename(path)}")
+    with os.fdopen(descriptor, "rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(chunk)
     return value.hexdigest()
@@ -46,7 +60,12 @@ def capture(entries):
     result = {}
     for entry in entries:
         details = entry.stat(follow_symlinks=False)
-        result[entry.name] = (details.st_ino, details.st_size, details.st_mtime_ns, digest(entry.path))
+        if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+            raise RuntimeError(f"unsafe database entry: {entry.name}")
+        result[entry.name] = (
+            details.st_dev, details.st_ino, details.st_nlink, details.st_size,
+            details.st_mtime_ns, digest(entry.path),
+        )
     return result
 
 
@@ -118,7 +137,7 @@ def snapshot(source, backups, output_uid, output_gid):
             entries_after = regular_files(source)
             after = capture(entries_after)
             copied = {entry.name: digest(os.path.join(data, entry.name)) for entry in entries_after}
-            if before == after and all(copied[name] == values[3] for name, values in before.items()):
+            if before == after and all(copied[name] == values[5] for name, values in before.items()):
                 completed = True
                 break
             time.sleep(1)

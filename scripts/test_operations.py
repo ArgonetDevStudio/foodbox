@@ -33,13 +33,17 @@ class OperationTests(unittest.TestCase):
         (self.root / "docker-compose.yml").write_text("services:\n  backend:\n    image: legacy:local\n", encoding="utf-8")
         (self.root / "db" / "db.json").write_text(json.dumps(VALID_DATABASE), encoding="utf-8")
         (self.root / ".mock-running").write_text("true", encoding="utf-8")
-        stage = self.root / ".incoming" / "test"
+        self._stage_deploy_bundle(self.root / ".incoming" / "test")
+        self._write_mocks()
+
+    def _stage_deploy_bundle(self, stage):
+        (stage / "deploy").mkdir(parents=True, exist_ok=True)
+        (stage / "scripts").mkdir(exist_ok=True)
         shutil.copy2(REPOSITORY / "docker-compose.yml", stage / "docker-compose.yml")
         shutil.copy2(REPOSITORY / "deploy" / "Caddyfile", stage / "deploy" / "Caddyfile")
         for name in ("deploy.sh", "rollback.sh", "job.sh", "db_snapshot.py", "db_restore.py",
                      "db_validate.py"):
             shutil.copy2(REPOSITORY / "scripts" / name, stage / "scripts" / name)
-        self._write_mocks()
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -66,14 +70,40 @@ class OperationTests(unittest.TestCase):
             arguments = [argument for argument in sys.argv[1:] if argument != "-T"]
             os.execv("/bin/mv", ["mv", *arguments])
         """)
+        self._write_executable("rmdir", """
+            #!/usr/bin/env python3
+            import os, pathlib, sys
+            if os.environ.get("MOCK_CLEANUP_FAIL") and any(
+                    pathlib.Path(argument).name.startswith(("transaction.", "rollback."))
+                    for argument in sys.argv[1:]):
+                raise SystemExit(1)
+            os.execv("/bin/rmdir", ["rmdir", *sys.argv[1:]])
+        """)
+        self._write_executable("rm", """
+            #!/usr/bin/env python3
+            import os, pathlib, subprocess, sys
+            result = subprocess.run(["/bin/rm", *sys.argv[1:]], check=False)
+            if os.environ.get("MOCK_RM_CLEANUP_FAIL") and any(
+                    pathlib.Path(argument).parent.name.startswith(("transaction.", "rollback."))
+                    for argument in sys.argv[1:] if not argument.startswith("-")):
+                raise SystemExit(1)
+            raise SystemExit(result.returncode)
+        """)
         self._write_executable("sudo", """
             #!/usr/bin/env python3
-            import os, sys
+            import os, pathlib, sys
             arguments = sys.argv[1:]
             if arguments == ["-n", "true"]:
                 raise SystemExit(0)
             if arguments and arguments[0] == "-n":
                 arguments = arguments[1:]
+            if any(argument.endswith("db_snapshot.py") for argument in arguments):
+                root = pathlib.Path(os.environ["MOCK_ROOT"])
+                counter = root / ".snapshot-count"
+                current = int(counter.read_text()) + 1 if counter.exists() else 1
+                counter.write_text(str(current))
+                if str(current) == os.environ.get("MOCK_SNAPSHOT_FAIL_AT"):
+                    raise SystemExit(1)
             if os.environ.get("MOCK_RESTORE_FAIL") and any(
                     argument.endswith("db_restore.py") for argument in arguments):
                 raise SystemExit(1)
@@ -113,6 +143,19 @@ class OperationTests(unittest.TestCase):
                 if current == 1 and os.environ.get("MOCK_CORRUPT_ONCE"):
                     (root / "db" / "db.json").write_text("[]", encoding="utf-8")
                     (root / "db" / "metadata.json").write_text('{"lastImageHash":"bad"}', encoding="utf-8")
+                if current == 1 and os.environ.get("MOCK_MUTATE_ON_FIRST_UP"):
+                    rows = json.loads((root / "db" / "db.json").read_text())
+                    rows[0]["menus"][0] = "mutated"
+                    (root / "db" / "db.json").write_text(json.dumps(rows), encoding="utf-8")
+                if current == 1 and os.environ.get("MOCK_DELETE_ON_FIRST_UP"):
+                    (root / "db" / "db.json").unlink()
+                if current == 1 and os.environ.get("MOCK_INVALID_ON_FIRST_UP"):
+                    (root / "db" / "db.json").write_text("{", encoding="utf-8")
+                if current == 1 and os.environ.get("MOCK_DAMAGE_PERSISTENT_FILES_ON_FIRST_UP"):
+                    (root / "db" / "db.backup.json").unlink()
+                    (root / "db" / "metadata.json").write_text(
+                        '{"lastImageHash":7}', encoding="utf-8")
+                    (root / "db" / "future state.bin").write_bytes(b"damaged")
                 if current == 1 and os.environ.get("MOCK_FAIL_FIRST_UP"):
                     raise SystemExit(1)
             elif args[:2] == ["inspect", "--format"]:
@@ -150,9 +193,9 @@ class OperationTests(unittest.TestCase):
             "MOCK_LOG": str(self.log),
             "PATH": str(self.bin) + os.pathsep + environment["PATH"],
         })
-        for name, enabled in flags.items():
-            if enabled:
-                environment[name] = "1"
+        for name, value in flags.items():
+            if value:
+                environment[name] = "1" if value is True else str(value)
         return environment
 
     def _run_deploy(self, **flags):
@@ -389,6 +432,54 @@ class OperationTests(unittest.TestCase):
         self.assertEqual((self.root / ".mock-running").read_text(), "true")
         self.assertFalse(list((self.root / ".deploy-state").glob("rollback.*")))
 
+    def test_manual_rollback_final_snapshot_failure_restarts_only_after_baseline_check(self):
+        current_image, _ = self._configure_rollback_release()
+        result = self._run_rollback(MOCK_SNAPSHOT_FAIL_AT=2)
+        self.assertEqual(result.returncode, 10, result.stdout + result.stderr)
+        self.assertEqual(json.loads((self.root / "db" / "db.json").read_text()), VALID_DATABASE)
+        self.assertIn(f"FOODBOX_IMAGE={current_image}", (self.root / ".deploy.env").read_text())
+        self.assertEqual((self.root / ".mock-running").read_text(), "true")
+        self.assertEqual((self.root / ".snapshot-count").read_text(), "2")
+        self.assertEqual(len(list((self.root / "backups").glob("db-*/manifest.json"))), 1)
+        self.assertFalse(list((self.root / ".deploy-state").glob("rollback.*")))
+
+    def _assert_final_snapshot_restart_damage_is_restored(self, damage_flag):
+        backup_contents = b"preserved backup\n"
+        metadata_contents = b'{"lastImageHash":"preserved"}\n'
+        custom_contents = b"opaque future state\x00\xff"
+        (self.root / "db" / "db.backup.json").write_bytes(backup_contents)
+        (self.root / "db" / "metadata.json").write_bytes(metadata_contents)
+        (self.root / "db" / "future state.bin").write_bytes(custom_contents)
+        self._configure_rollback_release()
+        result = self._run_rollback(
+            MOCK_SNAPSHOT_FAIL_AT=2,
+            MOCK_DAMAGE_PERSISTENT_FILES_ON_FIRST_UP=True,
+            **{damage_flag: True},
+        )
+        self.assertEqual(result.returncode, 11, result.stdout + result.stderr)
+        self.assertEqual(json.loads((self.root / "db" / "db.json").read_text()), VALID_DATABASE)
+        self.assertEqual((self.root / "db" / "db.backup.json").read_bytes(), backup_contents)
+        self.assertEqual((self.root / "db" / "metadata.json").read_bytes(), metadata_contents)
+        self.assertEqual((self.root / "db" / "future state.bin").read_bytes(), custom_contents)
+        self.assertEqual(
+            sorted(path.name for path in (self.root / "db").iterdir()),
+            ["db.backup.json", "db.json", "future state.bin", "metadata.json"],
+        )
+        self.assertEqual((self.root / ".mock-running").read_text(), "false")
+        self.assertEqual((self.root / ".snapshot-count").read_text(), "2")
+        self.assertEqual(len(list((self.root / "backups").glob("db-*/manifest.json"))), 1)
+        self.assertTrue(list((self.root / ".deploy-state").glob("rollback.*")))
+        self.assertIn("original database snapshot was restored exactly", result.stderr)
+
+    def test_manual_rollback_final_snapshot_failure_restores_restart_mutation(self):
+        self._assert_final_snapshot_restart_damage_is_restored("MOCK_MUTATE_ON_FIRST_UP")
+
+    def test_manual_rollback_final_snapshot_failure_restores_restart_deletion(self):
+        self._assert_final_snapshot_restart_damage_is_restored("MOCK_DELETE_ON_FIRST_UP")
+
+    def test_manual_rollback_final_snapshot_failure_restores_restart_corruption(self):
+        self._assert_final_snapshot_restart_damage_is_restored("MOCK_INVALID_ON_FIRST_UP")
+
     def test_manual_rollback_corruption_restores_snapshot_and_starting_release(self):
         current_image, _ = self._configure_rollback_release()
         result = self._run_rollback(MOCK_CORRUPT_ONCE=True)
@@ -435,6 +526,87 @@ class OperationTests(unittest.TestCase):
         reciprocal = self.root / ".deploy-state" / "releases" / pointer / "deploy.env"
         self.assertTrue(reciprocal.is_file())
 
+    def test_successful_deploy_cleanup_failure_exits_11(self):
+        result = self._run_deploy(MOCK_CLEANUP_FAIL=True)
+        self.assertEqual(result.returncode, 11, result.stdout + result.stderr)
+        self.assertEqual((self.root / ".mock-running").read_text(), "true")
+        self.assertTrue(list((self.root / ".deploy-state").glob("transaction.*")))
+
+    def test_recovered_deploy_cleanup_failure_exits_11(self):
+        self._configure_go_release()
+        result = self._run_deploy(MOCK_FAIL_FIRST_UP=True, MOCK_CLEANUP_FAIL=True)
+        self.assertEqual(result.returncode, 11, result.stdout + result.stderr)
+        self.assertEqual((self.root / ".mock-running").read_text(), "true")
+        self.assertTrue(list((self.root / ".deploy-state").glob("transaction.*")))
+
+    def test_successful_rollback_cleanup_failure_exits_11(self):
+        self._configure_rollback_release()
+        result = self._run_rollback(MOCK_CLEANUP_FAIL=True)
+        self.assertEqual(result.returncode, 11, result.stdout + result.stderr)
+        self.assertEqual((self.root / ".mock-running").read_text(), "true")
+        self.assertTrue(list((self.root / ".deploy-state").glob("rollback.*")))
+
+    def test_recovered_rollback_cleanup_failure_exits_11(self):
+        self._configure_rollback_release()
+        result = self._run_rollback(MOCK_FAIL_FIRST_UP=True, MOCK_CLEANUP_FAIL=True)
+        self.assertEqual(result.returncode, 11, result.stdout + result.stderr)
+        self.assertEqual((self.root / ".mock-running").read_text(), "true")
+        self.assertTrue(list((self.root / ".deploy-state").glob("rollback.*")))
+
+    def test_deploy_rm_cleanup_failure_cannot_be_masked_by_successful_rmdir(self):
+        result = self._run_deploy(MOCK_RM_CLEANUP_FAIL=True)
+        self.assertEqual(result.returncode, 11, result.stdout + result.stderr)
+        self.assertFalse(list((self.root / ".deploy-state").glob("transaction.*")))
+
+    def test_early_deploy_cleanup_rm_failure_exits_11(self):
+        self._configure_go_release()
+        (self.root / "deploy" / "Caddyfile").unlink()
+        result = self._run_deploy(MOCK_RM_CLEANUP_FAIL=True)
+        self.assertEqual(result.returncode, 11, result.stdout + result.stderr)
+        self.assertFalse((self.root / ".stop-count").exists())
+        self.assertFalse(list((self.root / ".deploy-state").glob("transaction.*")))
+
+    def test_rollback_rm_cleanup_failure_cannot_be_masked_by_successful_rmdir(self):
+        self._configure_rollback_release()
+        result = self._run_rollback(MOCK_RM_CLEANUP_FAIL=True)
+        self.assertEqual(result.returncode, 11, result.stdout + result.stderr)
+        self.assertFalse(list((self.root / ".deploy-state").glob("rollback.*")))
+
+    def test_job_rejects_symlinked_stage_children_without_path_escape(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(REPOSITORY / "scripts" / "job.sh", scripts / "job.sh")
+        stage = self.root / ".incoming" / "test"
+        shutil.rmtree(stage / "deploy")
+        victim = pathlib.Path(self.temporary.name) / "victim"
+        victim.mkdir()
+        victim_file = victim / "Caddyfile"
+        victim_file.write_text("must remain\n", encoding="utf-8")
+        (stage / "deploy").symlink_to(victim, target_is_directory=True)
+
+        result = subprocess.run([
+            "bash", str(scripts / "job.sh"), "start", "deploy-path-escape", "deploy",
+            IMAGE, PUBLIC_URL, str(stage),
+        ], env=self._environment(), text=True, capture_output=True, timeout=30)
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(victim_file.read_text(encoding="utf-8"), "must remain\n")
+        self.assertFalse((self.root / ".up-count").exists())
+
+        (stage / "deploy").unlink()
+        (stage / "deploy").mkdir()
+        shutil.copy2(REPOSITORY / "deploy" / "Caddyfile", stage / "deploy" / "Caddyfile")
+        staged_deploy = stage / "scripts" / "deploy.sh"
+        staged_deploy.unlink()
+        staged_deploy.symlink_to(victim_file)
+        file_result = subprocess.run([
+            "bash", str(scripts / "job.sh"), "start", "deploy-file-path-escape", "deploy",
+            IMAGE, PUBLIC_URL, str(stage),
+        ], env=self._environment(), text=True, capture_output=True, timeout=30)
+        self.assertEqual(file_result.returncode, 2, file_result.stdout + file_result.stderr)
+        self.assertEqual(victim_file.read_text(encoding="utf-8"), "must remain\n")
+        self.assertFalse((self.root / ".up-count").exists())
+
     def test_snapshot_rejects_malformed_and_symlinked_metadata(self):
         backups = self.root / "backups"
         backups.mkdir()
@@ -452,6 +624,161 @@ class OperationTests(unittest.TestCase):
             str(self.root / "db"), str(backups), str(os.getuid()), str(os.getgid()),
         ], capture_output=True)
         self.assertNotEqual(symlinked.returncode, 0)
+
+    def test_snapshot_and_restore_preserve_every_safe_regular_file_exactly(self):
+        backups = self.root / "backups"
+        backups.mkdir()
+        custom = self.root / "db" / "future state.bin"
+        custom.write_bytes(b"opaque persistent state\x00\xff")
+        custom.chmod(0o640)
+        snapshot = subprocess.check_output([
+            "python3", str(REPOSITORY / "scripts" / "db_snapshot.py"),
+            str(self.root / "db"), str(backups), str(os.getuid()), str(os.getgid()),
+        ], text=True).strip()
+        manifest = json.loads((pathlib.Path(snapshot) / "manifest.json").read_text())
+        self.assertEqual(
+            sorted(item["name"] for item in manifest["files"]),
+            ["db.json", "future state.bin"],
+        )
+
+        custom.write_bytes(b"damaged")
+        (self.root / "db" / "unexpected-new.dat").write_bytes(b"quarantine me")
+        subprocess.run([
+            "python3", str(REPOSITORY / "scripts" / "db_restore.py"), snapshot,
+            str(self.root / "db"), str(backups),
+        ], check=True)
+
+        self.assertEqual(
+            sorted(path.name for path in (self.root / "db").iterdir()),
+            ["db.json", "future state.bin"],
+        )
+        self.assertEqual(custom.read_bytes(), b"opaque persistent state\x00\xff")
+        self.assertEqual(custom.stat().st_mode & 0o777, 0o640)
+        self.assertTrue(any(
+            (path / "unexpected-new.dat").read_bytes() == b"quarantine me"
+            for path in backups.glob("rejected-db-*")
+            if (path / "unexpected-new.dat").is_file()
+        ))
+        subprocess.run([
+            "python3", str(REPOSITORY / "scripts" / "db_validate.py"), "--exact",
+            snapshot, str(self.root / "db"),
+        ], check=True)
+
+    def test_snapshot_rejects_unsafe_names_symlinks_hardlinks_and_special_files(self):
+        backups = self.root / "backups"
+        backups.mkdir()
+        snapshot_command = [
+            "python3", str(REPOSITORY / "scripts" / "db_snapshot.py"),
+            str(self.root / "db"), str(backups), str(os.getuid()), str(os.getgid()),
+        ]
+        outside = pathlib.Path(self.temporary.name) / "outside"
+        outside.write_text("outside", encoding="utf-8")
+
+        unsafe_entries = (
+            ("symlink", lambda path: path.symlink_to(outside)),
+            ("hardlink", lambda path: os.link(self.root / "db" / "db.json", path)),
+            ("fifo", lambda path: os.mkfifo(path)),
+            ("unsafe-name", lambda path: path.write_text("unsafe", encoding="utf-8")),
+        )
+        for kind, create in unsafe_entries:
+            with self.subTest(kind=kind):
+                name = "unsafe\nname" if kind == "unsafe-name" else f"unsafe-{kind}"
+                path = self.root / "db" / name
+                create(path)
+                result = subprocess.run(snapshot_command, text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                path.unlink()
+
+    def test_restore_rejects_manifest_path_traversal_before_live_changes(self):
+        backups = self.root / "backups"
+        backups.mkdir()
+        snapshot = pathlib.Path(subprocess.check_output([
+            "python3", str(REPOSITORY / "scripts" / "db_snapshot.py"),
+            str(self.root / "db"), str(backups), str(os.getuid()), str(os.getgid()),
+        ], text=True).strip())
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["files"][0]["name"] = "../escape"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        original = (self.root / "db" / "db.json").read_bytes()
+
+        result = subprocess.run([
+            "python3", str(REPOSITORY / "scripts" / "db_restore.py"), str(snapshot),
+            str(self.root / "db"), str(backups),
+        ], text=True, capture_output=True)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.root / "db" / "db.json").read_bytes(), original)
+        self.assertFalse((self.root / "escape").exists())
+
+    def test_restore_quarantines_unsafe_live_entries_without_following_them(self):
+        backups = self.root / "backups"
+        backups.mkdir()
+        metadata = self.root / "db" / "metadata.json"
+        metadata.write_text('{"lastImageHash":"original"}\n', encoding="utf-8")
+        snapshot = subprocess.check_output([
+            "python3", str(REPOSITORY / "scripts" / "db_snapshot.py"),
+            str(self.root / "db"), str(backups), str(os.getuid()), str(os.getgid()),
+        ], text=True).strip()
+        outside = pathlib.Path(self.temporary.name) / "outside-live"
+        outside.write_text("outside must remain", encoding="utf-8")
+
+        corruptions = (
+            ("symlink", lambda: (metadata.unlink(), metadata.symlink_to(outside))),
+            ("hardlink", lambda: (metadata.unlink(), os.link(outside, metadata))),
+            ("fifo", lambda: os.mkfifo(self.root / "db" / "rogue.fifo")),
+        )
+        for kind, corrupt in corruptions:
+            with self.subTest(kind=kind):
+                corrupt()
+                result = subprocess.run([
+                    "python3", str(REPOSITORY / "scripts" / "db_restore.py"), snapshot,
+                    str(self.root / "db"), str(backups),
+                ], text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(outside.read_text(encoding="utf-8"), "outside must remain")
+                self.assertEqual(
+                    sorted(path.name for path in (self.root / "db").iterdir()),
+                    ["db.json", "metadata.json"],
+                )
+                subprocess.run([
+                    "python3", str(REPOSITORY / "scripts" / "db_validate.py"), "--exact",
+                    snapshot, str(self.root / "db"),
+                ], check=True)
+
+    @unittest.skipUnless(pathlib.Path("/proc/self/cmdline").is_file(), "durable jobs require Linux /proc")
+    def test_deploy_job_clears_operation_owned_stage_on_start_and_reattach(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(REPOSITORY / "scripts" / "job.sh", scripts / "job.sh")
+        stage = self.root / ".incoming" / "test"
+        command = [
+            "bash", str(scripts / "job.sh"), "start", "deploy-stage-cleanup", "deploy",
+            IMAGE, PUBLIC_URL, str(stage),
+        ]
+
+        first = subprocess.run(command, env=self._environment(), text=True, capture_output=True)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertFalse(stage.exists())
+
+        status_command = [
+            "bash", str(self.root / ".deploy-state" / "jobs" / "deploy-stage-cleanup" / "job.sh"),
+            "status", "deploy-stage-cleanup",
+        ]
+        status = None
+        for _ in range(200):
+            status = subprocess.run(
+                status_command, env=self._environment(), text=True, capture_output=True)
+            if status.stdout.strip().startswith("EXIT:"):
+                break
+            time.sleep(0.05)
+        self.assertEqual(status.stdout.strip(), "EXIT:0", status.stdout + status.stderr)
+
+        self._stage_deploy_bundle(stage)
+        repeated = subprocess.run(command, env=self._environment(), text=True, capture_output=True)
+        self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
+        self.assertFalse(stage.exists())
+        self.assertEqual((self.root / ".up-count").read_text(), "1")
 
     @unittest.skipUnless(pathlib.Path("/proc/self/cmdline").is_file(), "durable jobs require Linux /proc")
     def test_detached_job_is_idempotent_and_crash_state_is_terminal(self):

@@ -343,9 +343,20 @@ echo "Verified database snapshot: $verified_db_backup"
 transaction_dir=$(mktemp -d "$state_dir/rollback.XXXXXX")
 preserve_transaction=false
 cleanup_transaction() {
+  local failed=false
   rm -f "$transaction_dir/docker-compose.yml" "$transaction_dir/Caddyfile" \
-    "$transaction_dir/deploy.env"
-  rmdir "$transaction_dir"
+    "$transaction_dir/deploy.env" || failed=true
+  rmdir "$transaction_dir" || failed=true
+  [[ $failed == false ]]
+}
+finish_transaction_cleanup() {
+  local outcome=$1
+  if ! cleanup_transaction; then
+    echo "The runtime outcome is known, but rollback transaction cleanup failed." >&2
+    exit 11
+  fi
+  preserve_transaction=false
+  exit "$outcome"
 }
 cleanup_safe_transaction_on_exit() {
   local status=$?
@@ -427,20 +438,38 @@ restart_starting_after_snapshot_failure() {
     "${starting_compose[@]}" ps >&2 || true
     return 1
   fi
-  if ! release_is_healthy || ! exactly_one_writer_is_running "${starting_compose[@]}"; then
-    echo "CRITICAL: the restarted Go release failed health or API checks." >&2
+  if ! database_is_preserved; then
+    echo "CRITICAL: the restarted writer changed or lost data from the original verified snapshot." >&2
+    if ! stop_compose_and_verify "${starting_compose[@]}"; then
+      echo "CRITICAL: the restarted writer could not be stopped before database recovery." >&2
+      return 1
+    fi
+    if ! sudo -n python3 "$restore_helper" "$verified_db_backup" "$foodbox_root/db" "$backup_dir" || \
+      ! database_matches_snapshot; then
+      echo "CRITICAL: the original verified snapshot could not be restored exactly." >&2
+      return 1
+    fi
+    echo "The original database snapshot was restored exactly and the writer remains stopped." >&2
+    return 1
+  fi
+  if ! release_is_healthy || ! database_is_preserved || ! database_and_api_are_consistent || \
+    ! exactly_one_writer_is_running "${starting_compose[@]}"; then
+    echo "CRITICAL: the restarted Go release failed health, API, database, or writer checks." >&2
+    if ! stop_compose_and_verify "${starting_compose[@]}"; then
+      echo "CRITICAL: the unverified writer could not be stopped safely." >&2
+      "${starting_compose[@]}" ps >&2 || true
+      return 1
+    fi
+    if ! database_is_preserved; then
+      echo "Database integrity changed while the restarted release was being verified." >&2
+      if ! sudo -n python3 "$restore_helper" "$verified_db_backup" "$foodbox_root/db" "$backup_dir" || \
+        ! database_matches_snapshot; then
+        echo "CRITICAL: the original verified snapshot could not be restored exactly." >&2
+        return 1
+      fi
+      echo "The original database snapshot was restored exactly and the writer remains stopped." >&2
+    fi
     "${starting_compose[@]}" ps >&2 || true
-    return 1
-  fi
-
-  local recovery_snapshot
-  if ! recovery_snapshot=$(snapshot_database) || ! snapshot_is_valid "$recovery_snapshot"; then
-    echo "CRITICAL: the restarted Go release database could not be verified." >&2
-    return 1
-  fi
-  verified_db_backup=$recovery_snapshot
-  if ! database_and_api_are_consistent; then
-    echo "CRITICAL: the restarted Go release failed database/API consistency checks." >&2
     return 1
   fi
   echo "The unchanged Go release was restarted and verified." >&2
@@ -460,9 +489,7 @@ fi
 final_db_backup=
 if ! final_db_backup=$(snapshot_database) || ! snapshot_is_valid "$final_db_backup"; then
   if restart_starting_after_snapshot_failure; then
-    cleanup_transaction
-    preserve_transaction=false
-    exit 10
+    finish_transaction_cleanup 10
   fi
   echo "Manual intervention is required on the production server." >&2
   exit 11
@@ -491,9 +518,7 @@ if [[ $rollback_ok != true ]]; then
     echo "Manual intervention is required on the production server." >&2
     exit 11
   fi
-  cleanup_transaction
-  preserve_transaction=false
-  exit 10
+  finish_transaction_cleanup 10
 fi
 
 next_pointer=$(mktemp "$state_dir/previous-release.XXXXXX")
@@ -504,12 +529,13 @@ if ! mv -f "$next_pointer" "$previous_pointer"; then
     echo "Manual intervention is required on the production server." >&2
     exit 11
   fi
-  cleanup_transaction
-  preserve_transaction=false
-  exit 10
+  finish_transaction_cleanup 10
 fi
 
-cleanup_transaction
+if ! cleanup_transaction; then
+  echo "Rollback succeeded, but transaction cleanup failed." >&2
+  exit 11
+fi
 preserve_transaction=false
 
 echo "Go rollback completed and passed public /healthz, /api/menu, and / checks."

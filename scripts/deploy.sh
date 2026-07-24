@@ -50,6 +50,14 @@ snapshot_helper="$incoming_dir/scripts/db_snapshot.py"
 restore_helper="$incoming_dir/scripts/db_restore.py"
 validate_helper="$incoming_dir/scripts/db_validate.py"
 
+if [[ ! -d $incoming_dir/deploy || -L $incoming_dir/deploy ]] || \
+  [[ $(realpath -m "$incoming_dir/deploy") != "$incoming_dir/deploy" ]] || \
+  [[ ! -d $incoming_dir/scripts || -L $incoming_dir/scripts ]] || \
+  [[ $(realpath -m "$incoming_dir/scripts") != "$incoming_dir/scripts" ]]; then
+  echo "The staging bundle contains an unsafe directory." >&2
+  exit 2
+fi
+
 for required_file in \
   "$incoming_dir/docker-compose.yml" \
   "$incoming_dir/deploy/Caddyfile" \
@@ -60,7 +68,7 @@ for required_file in \
   "$incoming_dir/scripts/db_restore.py" \
   "$incoming_dir/scripts/db_validate.py" \
   "$foodbox_root/.env"; do
-  if [[ ! -f $required_file ]]; then
+  if [[ ! -f $required_file || -L $required_file ]]; then
     echo "Required deployment file is missing: $required_file" >&2
     exit 2
   fi
@@ -148,11 +156,13 @@ transaction_dir=$(mktemp -d "$state_dir/transaction.XXXXXX")
 preserve_transaction=false
 cleanup_safe_transaction_on_exit() {
   local status=$?
+  local cleanup_failed=false
   trap - EXIT
   if [[ $preserve_transaction != true && -d $transaction_dir ]]; then
     rm -f "$transaction_dir/docker-compose.yml" "$transaction_dir/Caddyfile" \
-      "$transaction_dir/deploy.env"
-    if ! rmdir "$transaction_dir"; then
+      "$transaction_dir/deploy.env" || cleanup_failed=true
+    rmdir "$transaction_dir" || cleanup_failed=true
+    if [[ $cleanup_failed == true ]]; then
       echo "Could not clear deployment transaction state." >&2
       exit 11
     fi
@@ -289,9 +299,38 @@ restore_previous_release() {
 }
 
 cleanup_transaction() {
+  local failed=false
   rm -f "$transaction_dir/docker-compose.yml" "$transaction_dir/Caddyfile" \
-    "$transaction_dir/deploy.env"
-  rmdir "$transaction_dir"
+    "$transaction_dir/deploy.env" || failed=true
+  rmdir "$transaction_dir" || failed=true
+  [[ $failed == false ]]
+}
+
+finish_transaction_cleanup() {
+  local outcome=$1
+  if ! cleanup_transaction; then
+    echo "The runtime outcome is known, but deployment transaction cleanup failed." >&2
+    exit 11
+  fi
+  preserve_transaction=false
+  exit "$outcome"
+}
+
+cleanup_incoming_bundle() {
+  [[ -d $incoming_dir/deploy && ! -L $incoming_dir/deploy ]] &&
+    [[ $(realpath -m "$incoming_dir/deploy") == "$incoming_dir/deploy" ]] &&
+    [[ -d $incoming_dir/scripts && ! -L $incoming_dir/scripts ]] &&
+    [[ $(realpath -m "$incoming_dir/scripts") == "$incoming_dir/scripts" ]] || return 1
+  rm -f \
+    "$incoming_dir/docker-compose.yml" \
+    "$incoming_dir/deploy/Caddyfile" \
+    "$incoming_dir/scripts/deploy.sh" \
+    "$incoming_dir/scripts/rollback.sh" \
+    "$incoming_dir/scripts/job.sh" \
+    "$incoming_dir/scripts/db_snapshot.py" \
+    "$incoming_dir/scripts/db_restore.py" \
+    "$incoming_dir/scripts/db_validate.py" || return 1
+  rmdir "$incoming_dir/deploy" "$incoming_dir/scripts" "$incoming_dir"
 }
 
 probe_url() {
@@ -464,22 +503,14 @@ recover_or_exit() {
   local recovery_status
   trap - ERR
   if restore_previous_release; then
-    if ! cleanup_transaction; then
-      echo "Recovered the runtime, but could not clear deployment transaction state." >&2
-      exit 11
-    fi
     echo "Deployment failed, but the previous release was verified healthy." >&2
-    exit 10
+    finish_transaction_cleanup 10
   else
     recovery_status=$?
   fi
   if [[ $previous_is_go != true && $recovery_status == 2 ]]; then
-    if ! cleanup_transaction; then
-      echo "Recovered the stopped first-cutover state, but could not clear deployment transaction state." >&2
-      exit 11
-    fi
     echo "The first Go cutover is safely stopped. Correct the failure and retry deployment." >&2
-    exit 12
+    finish_transaction_cleanup 12
   fi
   echo "Manual intervention is required on the production server." >&2
   exit 11
@@ -491,22 +522,14 @@ handle_unexpected_error() {
   echo "Deployment command failed unexpectedly near line $line_number." >&2
   if [[ $release_changed == true ]]; then
     if restore_previous_release; then
-      if ! cleanup_transaction; then
-        echo "Recovered the runtime, but could not clear deployment transaction state." >&2
-        exit 11
-      fi
       echo "The previous release recovered after an unexpected deployment failure." >&2
-      exit 10
+      finish_transaction_cleanup 10
     else
       local recovery_status=$?
     fi
     if [[ $previous_is_go != true && $recovery_status == 2 ]]; then
-      if ! cleanup_transaction; then
-        echo "Recovered the stopped first-cutover state, but could not clear deployment transaction state." >&2
-        exit 11
-      fi
       echo "The first Go cutover is safely stopped. Correct the failure and retry deployment." >&2
-      exit 12
+      finish_transaction_cleanup 12
     fi
     echo "Manual intervention is required on the production server." >&2
     exit 11
@@ -691,17 +714,14 @@ fi
 release_changed=false
 trap - ERR
 
-cleanup_transaction
+if ! cleanup_transaction; then
+  echo "Deployment succeeded, but transaction cleanup failed." >&2
+  exit 11
+fi
 preserve_transaction=false
-rm -f \
-  "$incoming_dir/docker-compose.yml" \
-  "$incoming_dir/deploy/Caddyfile" \
-  "$incoming_dir/scripts/deploy.sh" \
-  "$incoming_dir/scripts/rollback.sh" \
-  "$incoming_dir/scripts/job.sh" \
-  "$incoming_dir/scripts/db_snapshot.py" \
-  "$incoming_dir/scripts/db_restore.py" \
-  "$incoming_dir/scripts/db_validate.py"
-rmdir "$incoming_dir/deploy" "$incoming_dir/scripts" "$incoming_dir" 2>/dev/null || true
+if ! cleanup_incoming_bundle; then
+  echo "Deployment succeeded, but the operation-owned bundle could not be cleared." >&2
+  exit 11
+fi
 
 echo "Deployment completed and passed public /healthz, /api/menu, and / checks."

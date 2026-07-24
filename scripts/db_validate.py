@@ -4,12 +4,24 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
+
+
+def safe_filename(name):
+    return isinstance(name, str) and name not in {"", ".", ".."} and \
+        os.path.basename(name) == name and len(os.fsencode(name)) <= 255 and \
+        all(character.isprintable() and character not in "\\\r\n" for character in name)
 
 
 def digest(path):
     value = hashlib.sha256()
-    with open(path, "rb") as stream:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    details = os.fstat(descriptor)
+    if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+        os.close(descriptor)
+        raise RuntimeError(f"unsafe regular file: {os.path.basename(path)}")
+    with os.fdopen(descriptor, "rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(chunk)
     return value.hexdigest()
@@ -67,11 +79,12 @@ def validate(snapshot, current, exact=False):
         if not isinstance(item, dict) or set(item) != {"name", "sha256", "bytes", "uid", "gid", "mode"}:
             raise RuntimeError("snapshot manifest item is invalid")
         name = item["name"]
-        if not isinstance(name, str) or name != os.path.basename(name) or name in {".", ".."} or name in expected:
+        if not safe_filename(name) or name in expected:
             raise RuntimeError("snapshot manifest filename is invalid")
         if not isinstance(item["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", item["sha256"]):
             raise RuntimeError("snapshot manifest checksum is invalid")
-        if any(type(item[field]) is not int or item[field] < 0 for field in ("bytes", "uid", "gid", "mode")):
+        if any(type(item[field]) is not int or item[field] < 0
+               for field in ("bytes", "uid", "gid", "mode")) or item["mode"] > 0o7777:
             raise RuntimeError("snapshot manifest metadata is invalid")
         expected[name] = item
     if "db.json" not in expected:
@@ -80,7 +93,10 @@ def validate(snapshot, current, exact=False):
     snapshot_data = os.path.join(snapshot, "data")
     snapshot_files = {}
     for entry in os.scandir(snapshot_data):
-        if not entry.is_file(follow_symlinks=False):
+        if not safe_filename(entry.name):
+            raise RuntimeError("snapshot contains an unsafe filename")
+        details = entry.stat(follow_symlinks=False)
+        if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
             raise RuntimeError(f"snapshot contains unsafe entry: {entry.name}")
         snapshot_files[entry.name] = entry.path
     if set(snapshot_files) != set(expected):
@@ -93,7 +109,10 @@ def validate(snapshot, current, exact=False):
     transient_prefixes = (".db.json.tmp-", ".metadata.json.tmp-", ".foodbox-writable-check-")
     transient_found = False
     for entry in os.scandir(current):
-        if not entry.is_file(follow_symlinks=False):
+        if not safe_filename(entry.name):
+            raise RuntimeError("live database contains an unsafe filename")
+        details = entry.stat(follow_symlinks=False)
+        if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
             raise RuntimeError(f"live database contains unsafe entry: {entry.name}")
         if entry.name.startswith(transient_prefixes):
             transient_found = True
