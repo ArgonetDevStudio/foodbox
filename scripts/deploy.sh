@@ -111,15 +111,22 @@ database_matches_snapshot() {
 
 compose_is_stopped() {
   local -a compose_command=("$@")
+  local services
+  local service
   local containers
   local container
   local running
-  containers=$("${compose_command[@]}" ps --all --quiet) || return 1
-  while IFS= read -r container; do
-    [[ -n $container ]] || continue
-    running=$(docker inspect --format '{{.State.Running}}' "$container") || return 1
-    [[ $running == false ]] || return 1
-  done <<<"$containers"
+  services=$("${compose_command[@]}" config --services) || return 1
+  [[ -n $services ]] || return 1
+  while IFS= read -r service; do
+    [[ -n $service ]] || continue
+    containers=$("${compose_command[@]}" ps --all --quiet "$service") || return 1
+    while IFS= read -r container; do
+      [[ -n $container ]] || continue
+      running=$(docker inspect --format '{{.State.Running}}' "$container") || return 1
+      [[ $running == false ]] || return 1
+    done <<<"$containers"
+  done <<<"$services"
 }
 
 stop_compose_and_verify() {

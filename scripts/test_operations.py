@@ -119,18 +119,36 @@ class OperationTests(unittest.TestCase):
             if args and args[0] == "compose" and "config" in args and "--images" in args:
                 print("ghcr.io/argonetdevstudio/foodbox@sha256:" + "a" * 64)
                 print("caddy:2-alpine@sha256:" + "b" * 64)
+            elif args and args[0] == "compose" and "config" in args and "--services" in args:
+                compose_path = pathlib.Path(args[args.index("-f") + 1])
+                in_services = False
+                for line in compose_path.read_text(encoding="utf-8").splitlines():
+                    if line == "services:":
+                        in_services = True
+                        continue
+                    if in_services and line and not line.startswith(" "):
+                        break
+                    if (in_services and line.startswith("  ")
+                            and not line.startswith("    ") and line.endswith(":")):
+                        print(line.strip()[:-1])
             elif args and args[0] == "compose" and "stop" in args:
                 count = root / ".stop-count"
                 count.write_text(str(int(count.read_text()) + 1) if count.exists() else "1")
                 if not os.environ.get("MOCK_STOP_UNCERTAIN"):
                     (root / ".mock-running").write_text("false")
             elif args and args[0] == "compose" and "ps" in args and "--quiet" in args:
-                app_only = args[-1] == "app"
-                print("cid-app")
-                if app_only and os.environ.get("MOCK_TWO_WRITERS"):
-                    print("cid-app-2")
-                elif not app_only:
+                service = args[-1] if args[-1] not in ("--quiet", "--all") else ""
+                if service in ("app", "backend"):
+                    print("cid-app")
+                elif service:
+                    print("cid-" + service)
+                else:
+                    print("cid-app")
                     print("cid-caddy")
+                    if os.environ.get("MOCK_RUNNING_ORPHAN"):
+                        print("cid-orphan")
+                if service == "app" and os.environ.get("MOCK_TWO_WRITERS"):
+                    print("cid-app-2")
             elif args and args[0] == "compose" and "up" in args:
                 count = root / ".up-count"
                 current = int(count.read_text()) + 1 if count.exists() else 1
@@ -161,7 +179,10 @@ class OperationTests(unittest.TestCase):
             elif args[:2] == ["inspect", "--format"]:
                 template = args[2]
                 if template == "{{.State.Running}}":
-                    print((root / ".mock-running").read_text())
+                    if args[-1] == "cid-orphan" and os.environ.get("MOCK_RUNNING_ORPHAN"):
+                        print("true")
+                    else:
+                        print((root / ".mock-running").read_text())
             raise SystemExit(0)
         """)
         self._write_executable("curl", """
@@ -321,6 +342,11 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(json.loads((self.root / "db" / "db.json").read_text()), VALID_DATABASE)
         self.assertFalse((self.root / ".deploy-state" / "previous-release").exists())
+
+    def test_first_cutover_ignores_running_orphan_outside_starting_compose(self):
+        result = self._run_deploy(MOCK_RUNNING_ORPHAN=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / ".mock-running").read_text(), "true")
 
     def test_invalid_database_fails_before_stop_or_uid_change(self):
         (self.root / "db" / "db.json").write_text("{}", encoding="utf-8")
