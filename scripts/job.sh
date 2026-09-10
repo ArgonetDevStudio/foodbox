@@ -245,6 +245,9 @@ case "$command_name" in
       result=$?
     fi
     set -e
+    # Publish the terminal result before exiting so status readers cannot
+    # mistake the short EXIT-trap window for a crashed detached job.
+    write_status "$result"
     exit "$result"
     ;;
 

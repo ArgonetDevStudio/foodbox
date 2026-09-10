@@ -4,11 +4,6 @@ on:
   pull_request:
     branches:
       - main
-      - dev
-  push:
-    branches:
-      - dev
-      - main
   workflow_dispatch:
 
 permissions:
