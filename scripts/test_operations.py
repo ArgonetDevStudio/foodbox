@@ -198,7 +198,8 @@ class OperationTests(unittest.TestCase):
             elif url.endswith("/api/menu"):
                 rows = json.loads((root / "db" / "db.json").read_text(encoding="utf-8"))
                 data = [{"date": f'{row["date"][0]:04d}-{row["date"][1]:02d}-{row["date"][2]:02d}',
-                         "menus": row["menus"], "isValid": row["valid"]} for row in reversed(rows)]
+                         "menus": row["menus"] if row["menus"] is not None else [],
+                         "isValid": row["valid"]} for row in reversed(rows)]
                 output.write_text(json.dumps({"status": 200, "error": None, "data": data},
                                              separators=(",", ":")), encoding="utf-8")
             else:
@@ -342,6 +343,21 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(json.loads((self.root / "db" / "db.json").read_text()), VALID_DATABASE)
         self.assertFalse((self.root / ".deploy-state" / "previous-release").exists())
+
+    def test_deploy_preserves_legacy_null_menus_and_api_parity(self):
+        legacy = [
+            {"date": [2025, 5, 5], "menus": None, "valid": False},
+            {"date": [2026, 7, 25], "menus": ["soup", "main", "side"], "valid": True},
+        ]
+        database = self.root / "db" / "db.json"
+        database.write_text(json.dumps(legacy), encoding="utf-8")
+        original = database.read_bytes()
+
+        result = self._run_deploy()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(database.read_bytes(), original)
+        self.assertEqual(json.loads(database.read_text(encoding="utf-8")), legacy)
 
     def test_first_cutover_ignores_running_orphan_outside_starting_compose(self):
         result = self._run_deploy(MOCK_RUNNING_ORPHAN=True)
@@ -551,6 +567,24 @@ class OperationTests(unittest.TestCase):
         self.assertNotEqual(pointer, "release-previous")
         reciprocal = self.root / ".deploy-state" / "releases" / pointer / "deploy.env"
         self.assertTrue(reciprocal.is_file())
+
+    def test_rollback_preserves_legacy_null_menus_and_api_parity(self):
+        current_image, previous_image = self._configure_rollback_release()
+        legacy = [
+            {"date": [2025, 5, 5], "menus": None, "valid": False},
+            {"date": [2026, 7, 25], "menus": ["soup", "main", "side"], "valid": True},
+        ]
+        database = self.root / "db" / "db.json"
+        database.write_text(json.dumps(legacy), encoding="utf-8")
+        original = database.read_bytes()
+
+        result = self._run_rollback()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"FOODBOX_IMAGE={previous_image}", (self.root / ".deploy.env").read_text())
+        self.assertNotEqual(previous_image, current_image)
+        self.assertEqual(database.read_bytes(), original)
+        self.assertEqual(json.loads(database.read_text(encoding="utf-8")), legacy)
 
     def test_successful_deploy_cleanup_failure_exits_11(self):
         result = self._run_deploy(MOCK_CLEANUP_FAIL=True)
