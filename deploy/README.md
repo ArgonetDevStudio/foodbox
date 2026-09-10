@@ -62,12 +62,12 @@ enters the GitHub `production` Environment; configure a required reviewer there
 to require explicit deployment approval. PR approval is separate and is
 enforced only by the repository's branch ruleset.
 
-The VM job runs detached from SSH. Re-running the same workflow run reattaches
-to the durable job instead of starting the operation again. A completed failed
-job reports its recorded result again rather than rerunning; after resolving an
-external preflight issue, push a new commit to create a new workflow run ID.
-Do not start a second operation while a job reports `RUNNING` or after
-`EXIT:21`.
+The VM job runs detached from SSH. Re-running the same workflow attempt
+reattaches to the durable job instead of starting the operation again. A
+completed failed attempt reports its recorded result again rather than
+rerunning; after resolving an external preflight issue, rerun the workflow to
+create a new attempt-scoped job and stage ID. Do not start a second operation
+while a job reports `RUNNING` or after `EXIT:21`.
 
 Every deployment snapshots the database before stopping the current stack,
 proves that all starting containers stopped, and takes a final stopped-state
