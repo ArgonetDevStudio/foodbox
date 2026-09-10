@@ -13,7 +13,7 @@ Production runs as two small containers:
 
 ## Requirements
 
-- Go 1.26.5 (the toolchain pinned by CI and release workflows; `go.mod`
+- Go 1.26.6 (the toolchain pinned by CI and release workflows; `go.mod`
   declares Go 1.25.0 as the module minimum)
 - Node.js 24 and npm
 - Docker with Docker Compose v2 for container testing or deployment

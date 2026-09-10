@@ -28,7 +28,7 @@ Keep this file short. Use `README.md` for development and API details and
 ## Current architecture
 
 - `backend/`: Go API, scheduler, crawler, OCR, file store, Slack client, and
-  static-file server; automation uses Go 1.26.5 and `go.mod` permits Go 1.25+
+  static-file server; automation uses Go 1.26.6 and `go.mod` permits Go 1.25+
 - `front/`: Svelte 5 UI, compiled into the Go container image
 - `deploy/Caddyfile`: public HTTP/HTTPS edge and automatic certificates
 - `docker-compose.yml`: one non-root Go app and one Caddy instance
