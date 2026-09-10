@@ -448,7 +448,10 @@ def load_database(path):
         parsed = datetime.date(*date)
         if parsed in result or (previous is not None and parsed < previous):
             raise SystemExit(1)
-        if not isinstance(row["menus"], list) or any(not isinstance(item, str) for item in row["menus"]):
+        if row["menus"] is not None and (
+                not isinstance(row["menus"], list) or
+                any(not isinstance(item, str) for item in row["menus"])
+        ):
             raise SystemExit(1)
         if type(row["valid"]) is not bool:
             raise SystemExit(1)
@@ -469,7 +472,7 @@ if envelope["status"] != 200 or envelope["error"] is not None or not isinstance(
     raise SystemExit(1)
 expected = [{
     "date": f'{row["date"][0]:04d}-{row["date"][1]:02d}-{row["date"][2]:02d}',
-    "menus": row["menus"],
+    "menus": row["menus"] if row["menus"] is not None else [],
     "isValid": row["valid"],
 } for row in reversed(current_rows)]
 if envelope["data"] != expected:
