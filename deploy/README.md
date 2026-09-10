@@ -61,8 +61,11 @@ to require explicit deployment approval. PR approval is separate and is
 enforced only by the repository's branch ruleset.
 
 The VM job runs detached from SSH. Re-running the same workflow run reattaches
-to the durable job instead of starting the operation again. Do not start a
-second operation while a job reports `RUNNING` or after `EXIT:21`.
+to the durable job instead of starting the operation again. A completed failed
+job reports its recorded result again rather than rerunning; after resolving an
+external preflight issue, push a new commit to create a new workflow run ID.
+Do not start a second operation while a job reports `RUNNING` or after
+`EXIT:21`.
 
 Every deployment snapshots the database before stopping the current stack,
 proves that all starting containers stopped, and takes a final stopped-state
