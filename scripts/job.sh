@@ -26,6 +26,7 @@ pid_file="$job_dir/pid"
 log_file="$job_dir/output.log"
 signature_file="$job_dir/request.sha256"
 launch_marker="$job_dir/launching"
+status_lock="$job_dir/status.lock"
 
 write_status() {
   local value=$1
@@ -33,6 +34,11 @@ write_status() {
   temporary=$(mktemp "$job_dir/status.XXXXXX")
   printf '%s\n' "$value" >"$temporary"
   mv -f "$temporary" "$status_file"
+}
+
+lock_status() {
+  exec 7>"$status_lock"
+  flock -w 15 7
 }
 
 hash_request() {
@@ -91,13 +97,21 @@ launch_job() {
       return 0
     fi
     echo "Deployment job $job_id stopped without recording a result." >&2
-    write_status 21
+    if lock_status; then
+      if [[ ! -f $status_file ]]; then
+        write_status 21
+      fi
+    fi
     return 0
   fi
 
   if [[ -f $launch_marker ]]; then
     echo "Deployment job $job_id has an indeterminate launch state." >&2
-    write_status 21
+    if lock_status; then
+      if [[ ! -f $status_file ]]; then
+        write_status 21
+      fi
+    fi
     return 0
   fi
 
@@ -221,10 +235,14 @@ case "$command_name" in
   run)
     operation=$(<"$job_dir/operation")
     result=2
+    rm -f "$launch_marker"
     # Invoked by the EXIT trap below.
     # shellcheck disable=SC2317,SC2329
     finish_job() {
       local shell_status=$?
+      if [[ -f $status_file ]] || ! lock_status; then
+        return
+      fi
       if [[ ! -f $status_file ]]; then
         if [[ $result == 2 && $shell_status != 0 ]]; then
           result=$shell_status
@@ -245,13 +263,21 @@ case "$command_name" in
       result=$?
     fi
     set -e
-    # Publish the terminal result before exiting so status readers cannot
-    # mistake the short EXIT-trap window for a crashed detached job.
-    write_status "$result"
+    # Serialize terminal publication with status classification so a stale
+    # liveness check cannot overwrite a completed result.
+    if lock_status; then
+      if [[ ! -f $status_file ]]; then
+        write_status "$result"
+      fi
+    fi
     exit "$result"
     ;;
 
   status)
+    if ! lock_status; then
+      echo "Could not lock deployment job status." >&2
+      exit 11
+    fi
     if [[ -f $status_file ]]; then
       result=$(<"$status_file")
       if [[ ! $result =~ ^[0-9]+$ ]]; then
@@ -261,17 +287,24 @@ case "$command_name" in
       echo "EXIT:$result"
       exit 0
     fi
+    if [[ -f $launch_marker ]]; then
+      if [[ -f $pid_file ]]; then
+        running_pid=$(<"$pid_file")
+        if kill -0 "$running_pid" 2>/dev/null; then
+          echo "RUNNING"
+          exit 0
+        fi
+      fi
+      write_status 21
+      echo "EXIT:21"
+      exit 0
+    fi
     if [[ -f $pid_file ]]; then
       running_pid=$(<"$pid_file")
       if process_is_our_job "$running_pid"; then
         echo "RUNNING"
         exit 0
       fi
-      write_status 21
-      echo "EXIT:21"
-      exit 0
-    fi
-    if [[ -f $launch_marker ]]; then
       write_status 21
       echo "EXIT:21"
       exit 0
