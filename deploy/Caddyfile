@@ -24,7 +24,7 @@
 		-Server
 	}
 
-	@admin path /api/crawl /api/crawl/* /api/upload /api/upload/* /api/slack/notify /api/slack/notify/*
+	@admin path /api/crawl /api/crawl/* /api/upload /api/upload/* /api/slack/notify /api/slack/notify/* /api/menu/manual /api/menu/manual/*
 	respond @admin 404
 
 	@assets path /assets/*

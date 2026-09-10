@@ -140,6 +140,7 @@ Management routes implemented by the application:
 | --- | --- | --- |
 | `POST` | `/api/crawl` | Download, OCR, and persist the current menu |
 | `POST` | `/api/upload` | Parse one multipart `file` upload, limited to 10 MB |
+| `POST` | `/api/menu/manual` | Validate and upsert one menu from an ISO date and ordered menu list |
 | `POST` | `/api/slack/notify` | Send today's notification immediately |
 
 Management routes require `ADMIN_TOKEN` through a bearer authorization header
@@ -148,9 +149,36 @@ the application, so possessing the token does not expose them on the public
 internet. Add a separately authenticated operator path before changing that
 edge policy.
 
+For local development, or when the application port is published, register or
+correct one date manually with an authenticated JSON request:
+
+```bash
+curl --fail --request POST http://127.0.0.1:8080/api/menu/manual \
+  --header "Authorization: Bearer $ADMIN_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data '{"date":"2026-10-01","menus":["콩나물국","갈비찜","미역줄기볶음","무생채나물무침","콩조림","아삭이장무침","꼬마김치"]}'
+```
+
+Production Compose exposes the app port only to the Compose network, and the
+public Caddy edge intentionally blocks this management route. Run the same
+request inside the app container instead:
+
+```bash
+ADMIN_TOKEN_VALUE='replace-with-server-admin-token'
+docker compose --env-file .deploy.env exec -T app wget -qO- \
+  --header="Authorization: Bearer ${ADMIN_TOKEN_VALUE}" \
+  --header='Content-Type: application/json' \
+  --post-data='{"date":"2026-10-01","menus":["콩나물국","갈비찜","미역줄기볶음","무생채나물무침","콩조림","아삭이장무침","꼬마김치"]}' \
+  http://127.0.0.1:8080/api/menu/manual
+```
+
+The date must be a valid `YYYY-MM-DD` value and `menus` must contain at least
+three non-empty strings. Repeating a date replaces only that date; existing
+dates remain unchanged.
+
 Responses use the `{status,error,data}` envelope and the menu fields consumed by
 the frontend. Error responses use the corresponding HTTP status. The
-state-changing crawl and Slack routes require `POST`.
+All state-changing management routes require `POST`.
 
 ## Persistence and scheduling
 

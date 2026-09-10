@@ -33,6 +33,7 @@ type MenuService interface {
 	Today(context.Context, domain.LocalDate) (domain.Menu, error)
 	Crawl(context.Context) error
 	ParseAndSave(context.Context, string) ([]domain.Menu, error)
+	SaveManual(context.Context, domain.LocalDate, []string) (domain.Menu, error)
 }
 
 type NotificationService interface {
@@ -106,6 +107,7 @@ func NewHandler(config Config, menus MenuService, notifications NotificationServ
 	api.HandleFunc("/healthz", allowMethods([]string{http.MethodGet}, h.health))
 	api.HandleFunc("/api/menu", allowMethods([]string{http.MethodGet}, h.findAll))
 	api.HandleFunc("/api/menu/today", allowMethods([]string{http.MethodGet}, h.today))
+	api.HandleFunc("/api/menu/manual", allowMethods([]string{http.MethodPost}, h.authorize(h.saveManual)))
 	api.HandleFunc("/api/upload", allowMethods([]string{http.MethodPost}, h.authorize(h.upload)))
 	api.HandleFunc("/api/crawl", allowMethods([]string{http.MethodPost}, h.authorize(h.crawl)))
 	api.HandleFunc("/api/slack/notify", allowMethods([]string{http.MethodPost}, h.authorize(h.notify)))
@@ -163,6 +165,56 @@ func (h *handler) findAll(response http.ResponseWriter, request *http.Request) {
 func (h *handler) today(response http.ResponseWriter, request *http.Request) {
 	today := domain.FromTime(h.now().In(h.location))
 	menu, err := h.menus.Today(request.Context(), today)
+	if err != nil {
+		h.writeServiceError(response, err)
+		return
+	}
+	h.writeSuccess(response, http.StatusOK, newMenuResponse(menu))
+}
+
+type manualMenuRequest struct {
+	Date  string   `json:"date"`
+	Menus []string `json:"menus"`
+}
+
+func (h *handler) saveManual(response http.ResponseWriter, request *http.Request) {
+	var payload *manualMenuRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		h.writeError(response, http.StatusBadRequest, "INVALID_REQUEST", "request body must be a valid JSON menu object")
+		return
+	}
+	if payload == nil {
+		h.writeError(response, http.StatusBadRequest, "INVALID_REQUEST", "request body must be a JSON menu object")
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		h.writeError(response, http.StatusBadRequest, "INVALID_REQUEST", "request body must contain exactly one JSON object")
+		return
+	}
+
+	date, err := domain.ParseLocalDate(payload.Date)
+	if err == nil {
+		err = date.Validate()
+	}
+	if err != nil {
+		h.writeError(response, http.StatusBadRequest, "INVALID_DATE", "date must be a valid ISO date (YYYY-MM-DD)")
+		return
+	}
+	if len(payload.Menus) < 3 {
+		h.writeError(response, http.StatusBadRequest, "INVALID_MENUS", "menus must contain at least three items")
+		return
+	}
+	for index, menu := range payload.Menus {
+		if strings.TrimSpace(menu) == "" {
+			h.writeError(response, http.StatusBadRequest, "INVALID_MENUS", fmt.Sprintf("menus[%d] must not be empty", index))
+			return
+		}
+	}
+
+	menu, err := h.menus.SaveManual(request.Context(), date, payload.Menus)
 	if err != nil {
 		h.writeServiceError(response, err)
 		return

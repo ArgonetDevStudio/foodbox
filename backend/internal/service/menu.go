@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -413,6 +414,37 @@ func (s *MenuService) ParseAndSave(ctx context.Context, path string) ([]domain.M
 	return menus, nil
 }
 
+// SaveManual validates and persists one operator-supplied menu. It shares the
+// crawl gate so an OCR refresh cannot overwrite a manual correction while the
+// correction is being written.
+func (s *MenuService) SaveManual(ctx context.Context, date domain.LocalDate, menus []string) (domain.Menu, error) {
+	if s.repository == nil {
+		return domain.Menu{}, fmt.Errorf("save manual menu: %w", ErrNotConfigured)
+	}
+	if err := date.Validate(); err != nil {
+		return domain.Menu{}, fmt.Errorf("save manual menu date: %w", err)
+	}
+	if len(menus) < 3 {
+		return domain.Menu{}, errors.New("manual menu must contain at least three items")
+	}
+	for index, menu := range menus {
+		if strings.TrimSpace(menu) == "" {
+			return domain.Menu{}, fmt.Errorf("manual menu item %d must not be empty", index)
+		}
+	}
+
+	if err := s.acquireCrawl(ctx); err != nil {
+		return domain.Menu{}, fmt.Errorf("save manual menu: %w", err)
+	}
+	defer s.releaseCrawl()
+
+	menu := domain.NewMenu(date, menus)
+	if err := s.repository.SaveAll(ctx, []domain.Menu{menu}); err != nil {
+		return domain.Menu{}, fmt.Errorf("save manual menu: %w", err)
+	}
+	return menu, nil
+}
+
 func (s *MenuService) parse(ctx context.Context, image []byte) ([]domain.Menu, error) {
 	response, err := s.ocr.Recognize(ctx, image)
 	if err != nil {
@@ -476,6 +508,9 @@ func (s *MenuService) StartBackgroundRefresh(ctx context.Context) <-chan error {
 }
 
 func (s *MenuService) acquireCrawl(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("context must not be nil")
+	}
 	select {
 	case s.crawlGate <- struct{}{}:
 		return nil

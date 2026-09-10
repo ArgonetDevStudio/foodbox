@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -889,6 +890,110 @@ func TestParseAndSaveLeavesCallerOwnedFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("caller-owned file was removed: %v", err)
+	}
+}
+
+func TestSaveManualUpsertsOneDateAndPreservesMenuOrder(t *testing.T) {
+	unchangedDate := domain.LocalDate{Year: 2026, Month: 9, Day: 30}
+	manualDate := domain.LocalDate{Year: 2026, Month: 10, Day: 1}
+	unchanged := domain.NewMenu(unchangedDate, []string{"old", "side", "kimchi"})
+	repository := newMemoryRepository(
+		unchanged,
+		domain.NewMenu(manualDate, []string{"previous", "menu", "value"}),
+	)
+	service := NewMenuService(repository, nil, nil, nil, nil)
+	wantItems := []string{"어묵국", "닭볶음탕", "호박볶음", "명엽채볶음"}
+
+	got, err := service.SaveManual(context.Background(), manualDate, wantItems)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Valid || got.Date != manualDate || !reflect.DeepEqual(got.Menus, wantItems) {
+		t.Fatalf("saved menu = %+v, want date/items and valid=true", got)
+	}
+	if repository.saveCalls != 1 {
+		t.Fatalf("SaveAll calls = %d, want 1", repository.saveCalls)
+	}
+
+	stored, found, err := repository.FindByDate(context.Background(), manualDate)
+	if err != nil || !found {
+		t.Fatalf("FindByDate(manual) = (%+v, %v, %v)", stored, found, err)
+	}
+	if !reflect.DeepEqual(stored.Menus, wantItems) || !stored.Valid {
+		t.Fatalf("stored manual menu = %+v, want ordered valid menu", stored)
+	}
+	untouched, found, err := repository.FindByDate(context.Background(), unchangedDate)
+	if err != nil || !found || !reflect.DeepEqual(untouched.Menus, unchanged.Menus) {
+		t.Fatalf("unchanged menu = (%+v, %v, %v), want original value", untouched, found, err)
+	}
+}
+
+func TestSaveManualRejectsInvalidMenusWithoutWriting(t *testing.T) {
+	date := domain.LocalDate{Year: 2026, Month: 10, Day: 1}
+	repository := newMemoryRepository()
+	service := NewMenuService(repository, nil, nil, nil, nil)
+
+	tests := []struct {
+		name  string
+		items []string
+	}{
+		{name: "too few", items: []string{"one", "two"}},
+		{name: "empty item", items: []string{"one", " ", "three"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := service.SaveManual(context.Background(), date, test.items); err == nil {
+				t.Fatal("SaveManual unexpectedly accepted invalid menu")
+			}
+		})
+	}
+	if repository.saveCalls != 0 {
+		t.Fatalf("SaveAll calls = %d, want 0", repository.saveCalls)
+	}
+}
+
+func TestSaveManualWaitsForConcurrentCrawl(t *testing.T) {
+	today := domain.LocalDate{Year: 2026, Month: 10, Day: 1}
+	path := writeImage(t, []byte("image"))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	repository := newMemoryRepository()
+	service := NewMenuService(
+		repository,
+		crawlerFunc(func(context.Context) (string, error) {
+			close(started)
+			<-release
+			return path, nil
+		}),
+		ocrFunc(func(context.Context, []byte) ([]byte, error) { return []byte("ocr"), nil }),
+		successfulParser(domain.NewMenu(today, []string{"crawled", "menu", "value"})),
+		&memoryHashStore{},
+	)
+
+	crawlResult := make(chan error, 1)
+	go func() { crawlResult <- service.Crawl(context.Background()) }()
+	<-started
+
+	manualResult := make(chan error, 1)
+	go func() {
+		_, err := service.SaveManual(context.Background(), today, []string{"manual", "side", "kimchi"})
+		manualResult <- err
+	}()
+	select {
+	case err := <-manualResult:
+		t.Fatalf("SaveManual completed while crawl held gate: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-crawlResult; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-manualResult; err != nil {
+		t.Fatal(err)
+	}
+	stored, found, err := repository.FindByDate(context.Background(), today)
+	if err != nil || !found || !reflect.DeepEqual(stored.Menus, []string{"manual", "side", "kimchi"}) {
+		t.Fatalf("stored menu = (%+v, %v, %v), want manual value after crawl", stored, found, err)
 	}
 }
 

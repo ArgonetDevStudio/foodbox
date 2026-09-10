@@ -173,6 +173,10 @@ func TestIntentionalAdminContractChangesAreProtected(t *testing.T) {
 				calls++
 				return []domain.Menu{}, nil
 			},
+			saveManualFn: func(context.Context, domain.LocalDate, []string) (domain.Menu, error) {
+				calls++
+				return domain.Menu{}, nil
+			},
 		}
 		notifications := &fakeNotificationService{
 			notifyFn: func(context.Context) error { calls++; return nil },
@@ -183,6 +187,7 @@ func TestIntentionalAdminContractChangesAreProtected(t *testing.T) {
 			httptest.NewRequest(http.MethodPost, "/api/crawl", nil),
 			httptest.NewRequest(http.MethodPost, "/api/slack/notify", nil),
 			multipartRequest(t, "/api/upload", "file", "menu.png", []byte("image")),
+			httptest.NewRequest(http.MethodPost, "/api/menu/manual", strings.NewReader(`{"date":"2026-10-01","menus":["one","two","three"]}`)),
 		}
 		for _, request := range requests {
 			response := httptest.NewRecorder()

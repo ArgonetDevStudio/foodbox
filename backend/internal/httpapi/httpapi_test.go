@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ type fakeMenuService struct {
 	todayFn        func(context.Context, domain.LocalDate) (domain.Menu, error)
 	crawlFn        func(context.Context) error
 	parseAndSaveFn func(context.Context, string) ([]domain.Menu, error)
+	saveManualFn   func(context.Context, domain.LocalDate, []string) (domain.Menu, error)
 }
 
 func (service *fakeMenuService) Ready(ctx context.Context) error {
@@ -60,6 +62,13 @@ func (service *fakeMenuService) ParseAndSave(ctx context.Context, path string) (
 		return service.parseAndSaveFn(ctx, path)
 	}
 	return []domain.Menu{}, nil
+}
+
+func (service *fakeMenuService) SaveManual(ctx context.Context, date domain.LocalDate, menus []string) (domain.Menu, error) {
+	if service.saveManualFn != nil {
+		return service.saveManualFn(ctx, date, menus)
+	}
+	return domain.NewMenu(date, menus), nil
 }
 
 type fakeNotificationService struct {
@@ -221,6 +230,137 @@ func TestLegacyAdminGETMethodsReturn405(t *testing.T) {
 			assertErrorCode(t, response.Body.Bytes(), "HttpRequestMethodNotSupportedException")
 		})
 	}
+}
+
+func TestManualMenuEndpointValidatesAndSavesOneMenu(t *testing.T) {
+	date, err := domain.NewLocalDate(2026, 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receivedDate domain.LocalDate
+	var receivedMenus []string
+	serviceCalls := 0
+	menus := &fakeMenuService{
+		saveManualFn: func(_ context.Context, gotDate domain.LocalDate, gotMenus []string) (domain.Menu, error) {
+			serviceCalls++
+			receivedDate = gotDate
+			receivedMenus = append([]string(nil), gotMenus...)
+			return domain.NewMenu(gotDate, gotMenus), nil
+		},
+	}
+	handler := newTestHandler(t, Config{AdminToken: "secret"}, menus, &fakeNotificationService{})
+	request := httptest.NewRequest(http.MethodPost, "/api/menu/manual", strings.NewReader(`{"date":"2026-10-01","menus":["one","side","kimchi"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Admin-Token", "secret")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	if serviceCalls != 1 || receivedDate != date {
+		t.Fatalf("SaveManual calls/date = %d/%s, want 1/%s", serviceCalls, receivedDate.String(), date.String())
+	}
+	if !reflect.DeepEqual(receivedMenus, []string{"one", "side", "kimchi"}) {
+		t.Fatalf("menus = %#v, want input order preserved", receivedMenus)
+	}
+	assertJSONEqual(t, response.Body.Bytes(), []byte(`{"status":200,"error":null,"data":{"date":"2026-10-01","menus":["one","side","kimchi"],"isValid":true}}`))
+}
+
+func TestManualMenuEndpointRejectsInvalidRequestsBeforeSaving(t *testing.T) {
+	serviceCalls := 0
+	menus := &fakeMenuService{
+		saveManualFn: func(context.Context, domain.LocalDate, []string) (domain.Menu, error) {
+			serviceCalls++
+			return domain.Menu{}, nil
+		},
+	}
+	handler := newTestHandler(t, Config{AdminToken: "secret"}, menus, &fakeNotificationService{})
+	tests := []struct {
+		name string
+		body string
+		code string
+	}{
+		{name: "malformed JSON", body: `{"date":"2026-10-01",`, code: "INVALID_REQUEST"},
+		{name: "trailing JSON", body: `{"date":"2026-10-01","menus":["one","two","three"]}{}`, code: "INVALID_REQUEST"},
+		{name: "invalid leap day", body: `{"date":"2026-02-29","menus":["one","two","three"]}`, code: "INVALID_DATE"},
+		{name: "invalid date format", body: `{"date":"2026/10/01","menus":["one","two","three"]}`, code: "INVALID_DATE"},
+		{name: "fewer than three menus", body: `{"date":"2026-10-01","menus":["one","two"]}`, code: "INVALID_MENUS"},
+		{name: "empty menu item", body: `{"date":"2026-10-01","menus":["one"," ","three"]}`, code: "INVALID_MENUS"},
+		{name: "unknown field", body: `{"date":"2026-10-01","menus":["one","two","three"],"valid":true}`, code: "INVALID_REQUEST"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/menu/manual", strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer secret")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+			}
+			assertErrorCode(t, response.Body.Bytes(), test.code)
+		})
+	}
+	if serviceCalls != 0 {
+		t.Fatalf("SaveManual calls = %d, want 0 for invalid requests", serviceCalls)
+	}
+}
+
+func TestManualMenuEndpointRequiresAdminTokenAndPOST(t *testing.T) {
+	body := `{"date":"2026-10-01","menus":["one","two","three"]}`
+
+	t.Run("disabled", func(t *testing.T) {
+		calls := 0
+		menus := &fakeMenuService{saveManualFn: func(context.Context, domain.LocalDate, []string) (domain.Menu, error) {
+			calls++
+			return domain.Menu{}, nil
+		}}
+		handler := newTestHandler(t, Config{}, menus, &fakeNotificationService{})
+		request := httptest.NewRequest(http.MethodPost, "/api/menu/manual", strings.NewReader(body))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+		}
+		assertErrorCode(t, response.Body.Bytes(), "ADMIN_DISABLED")
+		if calls != 0 {
+			t.Fatalf("SaveManual calls = %d, want 0", calls)
+		}
+	})
+
+	t.Run("invalid token", func(t *testing.T) {
+		calls := 0
+		menus := &fakeMenuService{saveManualFn: func(context.Context, domain.LocalDate, []string) (domain.Menu, error) {
+			calls++
+			return domain.Menu{}, nil
+		}}
+		handler := newTestHandler(t, Config{AdminToken: "secret"}, menus, &fakeNotificationService{})
+		request := httptest.NewRequest(http.MethodPost, "/api/menu/manual", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer wrong")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+		}
+		assertErrorCode(t, response.Body.Bytes(), "UNAUTHORIZED")
+		if calls != 0 {
+			t.Fatalf("SaveManual calls = %d, want 0", calls)
+		}
+	})
+
+	t.Run("GET is not allowed", func(t *testing.T) {
+		handler := newTestHandler(t, Config{AdminToken: "secret"}, &fakeMenuService{}, &fakeNotificationService{})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/menu/manual", nil))
+		if response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+		}
+		if got := response.Header().Get("Allow"); got != http.MethodPost {
+			t.Fatalf("Allow = %q, want POST", got)
+		}
+		assertErrorCode(t, response.Body.Bytes(), "HttpRequestMethodNotSupportedException")
+	})
 }
 
 func TestNotifyEndpointUsesNotificationService(t *testing.T) {

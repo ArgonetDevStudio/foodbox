@@ -95,7 +95,7 @@ The detached operation reports these final results:
 
 - `/healthz` remains public and is also used by Caddy for active upstream health
   checks. It must be fast and must not call Slack, Clova, or the menu vendor.
-- `/api/crawl`, `/api/upload`, and `/api/slack/notify` are intentionally returned
+- `/api/crawl`, `/api/upload`, `/api/menu/manual`, and `/api/slack/notify` are intentionally returned
   as 404 at the public edge. Run equivalent administrative operations from the
   server or add application-level authentication before exposing them.
 - Request bodies are limited to the configured 10 MB upload limit.
