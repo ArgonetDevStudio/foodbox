@@ -892,6 +892,85 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(launch_status.returncode, 0, launch_status.stdout + launch_status.stderr)
         self.assertEqual(launch_status.stdout.strip(), "EXIT:21")
 
+    @unittest.skipUnless(pathlib.Path("/proc/self/cmdline").is_file(), "durable jobs require Linux /proc")
+    def test_detached_status_waits_for_terminal_publication(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        for name in ("job.sh", "db_snapshot.py", "db_restore.py", "db_validate.py"):
+            shutil.copy2(REPOSITORY / "scripts" / name, scripts / name)
+        runner = scripts / "test-runner.sh"
+        runner.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        runner.chmod(0o755)
+
+        self._write_executable("flock", """
+            #!/usr/bin/env python3
+            import os
+            import sys
+
+            os.execv("/usr/bin/flock", ["flock", *sys.argv[1:]])
+        """)
+        self._write_executable("mv", """
+            #!/usr/bin/env python3
+            import os
+            import pathlib
+            import sys
+            import time
+
+            arguments = sys.argv[1:]
+            destination = pathlib.Path(arguments[-1])
+            if destination.name == "status" and os.environ.get("BLOCK_STATUS_MOVE"):
+                blocked = pathlib.Path(os.environ["STATUS_MOVE_BLOCKED"])
+                if not blocked.exists():
+                    pathlib.Path(os.environ["STATUS_MOVE_READY"]).write_text("ready", encoding="utf-8")
+                    blocked.write_text("blocked", encoding="utf-8")
+                    while not pathlib.Path(os.environ["STATUS_MOVE_RELEASE"]).exists():
+                        time.sleep(0.001)
+            os.execv("/bin/mv", ["mv", *arguments])
+        """)
+        environment = self._environment()
+        environment.update({
+            "BLOCK_STATUS_MOVE": "1",
+            "STATUS_MOVE_BLOCKED": str(self.root / ".status-move-blocked"),
+            "STATUS_MOVE_READY": str(self.root / ".status-move-ready"),
+            "STATUS_MOVE_RELEASE": str(self.root / ".status-move-release"),
+        })
+        job_id = "rollback-status-publication"
+        command = ["bash", str(scripts / "job.sh"), "start", job_id, "rollback", PUBLIC_URL, str(runner)]
+        first = subprocess.run(command, env=environment, text=True, capture_output=True)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        ready = self.root / ".status-move-ready"
+        for _ in range(200):
+            if ready.exists():
+                break
+            time.sleep(0.01)
+        self.assertTrue(ready.exists(), "the detached runner did not reach terminal publication")
+
+        pid_file = self.root / ".deploy-state" / "jobs" / job_id / "pid"
+        pid_file.write_text("99999999\n", encoding="utf-8")
+        status_command = ["bash", str(self.root / ".deploy-state" / "jobs" / job_id / "job.sh"),
+                          "status", job_id]
+        status_process = subprocess.Popen(
+            status_command, env=environment, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        completed_before_release = False
+        try:
+            try:
+                stdout, stderr = status_process.communicate(timeout=0.5)
+                completed_before_release = True
+            except subprocess.TimeoutExpired:
+                (self.root / ".status-move-release").write_text("release", encoding="utf-8")
+                stdout, stderr = status_process.communicate(timeout=5)
+        finally:
+            (self.root / ".status-move-release").write_text("release", encoding="utf-8")
+            if status_process.poll() is None:
+                status_process.kill()
+                status_process.wait(timeout=5)
+
+        self.assertFalse(completed_before_release, stdout + stderr)
+        self.assertEqual(status_process.returncode, 0, stdout + stderr)
+        self.assertEqual(stdout.strip(), "EXIT:0")
+
     def test_blank_metadata_and_known_transient_file_are_valid(self):
         backups = self.root / "backups"
         backups.mkdir()
