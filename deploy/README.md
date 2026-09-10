@@ -49,7 +49,9 @@ rollback state. Application secrets remain separately in `.env`; neither file
 belongs in source control.
 
 Do not run `docker compose down -v` in production because it removes the Caddy
-volumes. Back up `./db` before deployment. Only one `app` instance may run at a
+volumes. Back up `./db` before deployment. Snapshots preserve legacy records
+with `"menus": null`, which the Go store reads as a nil slice; non-array or
+non-string menu values remain invalid. Only one `app` instance may run at a
 time because the database is file-based and the app owns scheduled Slack jobs.
 
 ## Automated release and rollback

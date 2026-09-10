@@ -184,6 +184,9 @@ All state-changing management routes require `POST`.
 
 - `db.json` stores dates as `[year,month,day]` alongside `menus` and `valid`.
   Disk records are oldest first; `/api/menu` is newest first.
+- Deployment snapshots preserve legacy records with `"menus": null`, which the
+  Go store reads as a nil slice; non-array or non-string menu values remain
+  invalid, and new writes use arrays.
 - `metadata.json` persists the last successfully processed image hash, avoiding
   duplicate OCR work across restarts. A matching hash is skipped only while the
   database still contains today's menu, so missing state can repair itself.

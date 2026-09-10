@@ -87,7 +87,10 @@ def validate_database(path):
             raise RuntimeError("database dates must be unique and oldest first")
         seen.add(parsed)
         previous = parsed
-        if not isinstance(row["menus"], list) or any(not isinstance(item, str) for item in row["menus"]):
+        if row["menus"] is not None and (
+                not isinstance(row["menus"], list) or
+                any(not isinstance(item, str) for item in row["menus"])
+        ):
             raise RuntimeError("database menus are invalid")
         if type(row["valid"]) is not bool:
             raise RuntimeError("database validity is invalid")
