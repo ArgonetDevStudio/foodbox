@@ -199,7 +199,7 @@ All state-changing management routes require `POST`.
 
 - `.github/workflows/ci.yml` tests Go, validates deployment operations, builds
   Svelte, and builds the Linux AMD64 container for pull requests targeting
-  `dev` or `main`, pushes to either branch, and manual dispatches.
+  `main` and manual dispatches. Commits pushed to `dev` do not start CI.
 - `.github/workflows/deploy.yml` starts on every push to `main`. Its own release
   verification must pass before it builds and publishes the GHCR image, and
   only the exact published digest is passed to the server deployment job.
