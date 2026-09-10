@@ -651,6 +651,43 @@ class OperationTests(unittest.TestCase):
         ], capture_output=True)
         self.assertNotEqual(symlinked.returncode, 0)
 
+    def test_snapshot_and_validation_handle_legacy_null_menus_and_reject_invalid_types(self):
+        backups = self.root / "backups"
+        backups.mkdir()
+        database = self.root / "db" / "db.json"
+        legacy = [
+            {"date": [2025, 5, 5], "menus": None, "valid": False},
+            {"date": [2025, 5, 6], "menus": ["soup", "main", "side"], "valid": True},
+        ]
+        original = json.dumps(legacy, separators=(",", ":")).encode()
+        database.write_bytes(original)
+
+        snapshot = pathlib.Path(subprocess.check_output([
+            "python3", str(REPOSITORY / "scripts" / "db_snapshot.py"),
+            str(self.root / "db"), str(backups), str(os.getuid()), str(os.getgid()),
+        ], text=True).strip())
+        self.assertEqual((snapshot / "data" / "db.json").read_bytes(), original)
+        subprocess.run([
+            "python3", str(REPOSITORY / "scripts" / "db_validate.py"), "--exact",
+            str(snapshot), str(self.root / "db"),
+        ], check=True)
+
+        for menus in ({"unexpected": "object"}, ["soup", 7]):
+            with self.subTest(menus=menus):
+                database.write_text(json.dumps([{
+                    "date": [2025, 5, 5], "menus": menus, "valid": False,
+                }]), encoding="utf-8")
+                snapshot_result = subprocess.run([
+                    "python3", str(REPOSITORY / "scripts" / "db_snapshot.py"),
+                    str(self.root / "db"), str(backups), str(os.getuid()), str(os.getgid()),
+                ], text=True, capture_output=True)
+                self.assertNotEqual(snapshot_result.returncode, 0)
+                validate_result = subprocess.run([
+                    "python3", str(REPOSITORY / "scripts" / "db_validate.py"),
+                    str(snapshot), str(self.root / "db"),
+                ], text=True, capture_output=True)
+                self.assertNotEqual(validate_result.returncode, 0)
+
     def test_snapshot_and_restore_preserve_every_safe_regular_file_exactly(self):
         backups = self.root / "backups"
         backups.mkdir()
