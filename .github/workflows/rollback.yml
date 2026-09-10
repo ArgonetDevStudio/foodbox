@@ -51,7 +51,7 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/foodbox_deploy" "$HOME/.ssh/known_hosts"
           printf 'DEPLOY_PORT=%s\n' "$DEPLOY_PORT" >> "$GITHUB_ENV"
-          printf 'ROLLBACK_JOB_ID=rollback-%s\n' "$GITHUB_RUN_ID" >> "$GITHUB_ENV"
+          printf 'ROLLBACK_JOB_ID=rollback-%s-attempt-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
 
       - name: Roll back and verify production
         shell: bash

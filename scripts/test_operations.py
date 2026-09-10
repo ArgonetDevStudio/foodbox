@@ -334,6 +334,32 @@ class OperationTests(unittest.TestCase):
                 self.assertIn(canonical_guard, contents)
                 self.assertLess(contents.index(path_guard), contents.index('mkdir -p "$HOME/.ssh"'))
 
+    def test_workflow_durable_job_ids_are_scoped_to_run_attempt(self):
+        deploy = (REPOSITORY / ".github" / "workflows" / "deploy.yml").read_text(
+            encoding="utf-8"
+        )
+        rollback = (REPOSITORY / ".github" / "workflows" / "rollback.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "printf 'DEPLOY_JOB_ID=deploy-%s-attempt-%s\\n' \"$GITHUB_RUN_ID\" \"$GITHUB_RUN_ATTEMPT\"",
+            deploy,
+        )
+        self.assertIn(
+            "printf 'DEPLOY_STAGE_ID=deploy-%s-attempt-%s\\n' \"$GITHUB_RUN_ID\" \"$GITHUB_RUN_ATTEMPT\"",
+            deploy,
+        )
+        self.assertIn(
+            "printf 'ROLLBACK_JOB_ID=rollback-%s-attempt-%s\\n' \"$GITHUB_RUN_ID\" \"$GITHUB_RUN_ATTEMPT\"",
+            rollback,
+        )
+        self.assertNotIn("DEPLOY_JOB_ID=deploy-%s\\n", deploy)
+        self.assertNotIn("ROLLBACK_JOB_ID=rollback-%s\\n", rollback)
+
+        self.assertNotEqual("deploy-123-attempt-1", "deploy-123-attempt-2")
+        self.assertNotEqual("rollback-123-attempt-1", "rollback-123-attempt-2")
+
     def test_first_cutover_stops_writer_after_snapshot_and_succeeds(self):
         result = self._run_deploy()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
