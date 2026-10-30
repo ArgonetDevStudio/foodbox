@@ -2,6 +2,7 @@
 
 Keep this file short. Use `README.md` for development and API details and
 `deploy/README.md` for production HTTPS operations.
+For 이소도시락 menu originals and operation-ready JSON (식단표 원본·운영 JSON), use `.agents/skills/foodbox-menu/SKILL.md`.
 
 ## Root agent role
 
