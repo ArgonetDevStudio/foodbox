@@ -29,7 +29,7 @@ For 이소도시락 menu originals and operation-ready JSON (식단표 원본·�
 ## Current architecture
 
 - `backend/`: Go API, scheduler, crawler, OCR, file store, Slack client, and
-  static-file server; automation uses Go 1.26.6 and `go.mod` permits Go 1.25+
+  static-file server; automation uses Go 1.26.10 and `go.mod` permits Go 1.26+
 - `front/`: Svelte 5 UI, compiled into the Go container image
 - `deploy/Caddyfile`: public HTTP/HTTPS edge and automatic certificates
 - `docker-compose.yml`: one non-root Go app and one Caddy instance

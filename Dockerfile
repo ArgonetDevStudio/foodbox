@@ -12,7 +12,7 @@ COPY front/ ./
 RUN npm run build
 
 
-FROM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS backend-build
+FROM golang:1.26.10-alpine3.23@sha256:34414731924cf2263160f0021f5cf6e1807382d85248f7cb419d4187b96d5e43 AS backend-build
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
